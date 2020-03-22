@@ -15,7 +15,6 @@ import           Data.List (intersperse, sortOn)
 
 import qualified GhcPlugins
 import           Outputable ((<+>), ppr, text)
-import qualified TcEvidence
 import qualified TcPluginM
 import qualified TcRnMonad
 import           TcRnTypes (Ct)
@@ -261,24 +260,14 @@ canonicalizeFmvs env allFuneqs ds ws = do
                 -- rewrite all occurrences of the fmv, so it's
                 -- harmless to discard the CFunEq in this way.
 
-                -- set the old funeq's evidence
-                let ev =
-                        TcEvidence.EvExpr $
-                        GhcPlugins.Coercion $
-                        pluginCo
-                            (funeqType env funeq)
-                            t
-
                 -- TODO should we indirect through a new CTyEqCan when
                 -- @t@ is a tyvar? Else the new tyvar could be an fmv
                 -- that ends up written to the old fmv. That seems
                 -- somewhat sloppy but might not be problematic.
 
-                new_ct <- emitNewDerivedEq
-                  (TcRnTypes.bumpCtLocDepth (TcRnTypes.ctEvLoc fe_ev))
+                replaceWantedEq fe_ct
+                  (funeqType env funeq) (GhcPlugins.mkTyVarTy fe_rhs)
                   (GhcPlugins.mkTyVarTy fe_rhs) t
-
-                pure $ new_ct <> solveWanted ev fe_ct
 
             Right fat -> do
                 -- we are replacing this CFunEq with a new CFunEq

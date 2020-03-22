@@ -16,6 +16,8 @@ module Data.QVec.Qu (
   plusQu,
   recipQu,
   timesQu,
+  zeroQu,
+  mkQu,
   -- *
   UnitCoercion (..),
   coerceUnit,
@@ -38,6 +40,12 @@ import           Data.QVec
 
 newtype Qu (u :: QVec k) a = UnsafeQu a
   deriving (Eq, Ord)
+
+zeroQu :: Num a => Qu u a
+zeroQu = UnsafeQu 0
+
+mkQu :: a -> Qu u a
+mkQu = UnsafeQu
 
 infixl 7 `timesQu`
 

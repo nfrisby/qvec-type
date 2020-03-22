@@ -145,148 +145,183 @@ data SI =
 
 second :: Num a => Qu (Nil :+ S) a
 second = UnsafeQu 1
+invSecond :: Num a => Qu (Nil :- S) a
+invSecond = UnsafeQu 1
 
 meter :: Num a => Qu (Nil :+ M) a
 meter = UnsafeQu 1
+invMeter :: Num a => Qu (Nil :- M) a
+invMeter = UnsafeQu 1
 
 gram :: Num a => Qu (Nil :+ G) a
 gram = UnsafeQu 1
+invGram :: Num a => Qu (Nil :- G) a
+invGram = UnsafeQu 1
 
 ampere :: Num a => Qu (Nil :+ A) a
 ampere = UnsafeQu 1
+invAmpere :: Num a => Qu (Nil :- A) a
+invAmpere = UnsafeQu 1
 
 kelvin :: Num a => Qu (Nil :+ K) a
 kelvin = UnsafeQu 1
+invKelvin :: Num a => Qu (Nil :- K) a
+invKelvin = UnsafeQu 1
 
 mole :: Num a => Qu (Nil :+ Mol) a
 mole = UnsafeQu 1
+invMole :: Num a => Qu (Nil :- Mol) a
+invMole = UnsafeQu 1
 
 candela :: Num a => Qu (Nil :+ Cd) a
 candela = UnsafeQu 1
+invCandela :: Num a => Qu (Nil :- Cd) a
+invCandela = UnsafeQu 1
 
 radian :: Num a => Qu (Nil :+ Rad) a
 radian = UnsafeQu 1
-
+invRadian :: Num a => Qu (Nil :- Rad) a
+invRadian = UnsafeQu 1
 baseRadian :: UnitCoercion (Nil :+ Rad) Nil
 baseRadian = UnsafeUnitCoercion
 
 steradian :: Num a => Qu (Nil :+ Sr) a
 steradian = UnsafeQu 1
-
+invSteradian :: Num a => Qu (Nil :- Sr) a
+invSteradian = UnsafeQu 1
 baseSteradian :: UnitCoercion (Nil :+ Sr) Nil
 baseSteradian = UnsafeUnitCoercion
 
 hertz :: Num a => Qu (Nil :+ Hz) a
 hertz = UnsafeQu 1
-
+invHertz :: Num a => Qu (Nil :- Hz) a
+invHertz = UnsafeQu 1
 baseHertz :: UnitCoercion (Nil :+ Hz) (Nil :+ S)
 baseHertz = UnsafeUnitCoercion
 
 newton :: Num a => Qu (Nil :+ N) a
 newton = UnsafeQu 1
-
+invNewton :: Num a => Qu (Nil :- N) a
+invNewton = UnsafeQu 1
 baseNewton :: UnitCoercion (Nil :+ N) (BvN 3 Deca :+ G :+ M :- S :- S)
 baseNewton = UnsafeUnitCoercion
 
 pascal :: Num a => Qu (Nil :+ Pa) a
 pascal = UnsafeQu 1
-
+invPascal :: Num a => Qu (Nil :- Pa) a
+invPascal = UnsafeQu 1
 basePascal :: UnitCoercion (Nil :+ Pa) (BvN 3 Deca :+ G :- M :- S :- S)
 basePascal = UnsafeUnitCoercion
 
 joule :: Num a => Qu (Nil :+ J) a
 joule = UnsafeQu 1
-
+invJoule :: Num a => Qu (Nil :- J) a
+invJoule = UnsafeQu 1
 baseJoule :: UnitCoercion (Nil :+ J) (BvN 3 Deca :+ G :+ M :+ M :- S :- S)
 baseJoule = UnsafeUnitCoercion
 
 watt :: Num a => Qu (Nil :+ W) a
 watt = UnsafeQu 1
-
+invWatt :: Num a => Qu (Nil :- W) a
+invWatt = UnsafeQu 1
 baseWatt :: UnitCoercion (Nil :+ W) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S)
 baseWatt = UnsafeUnitCoercion
 
 coulomb :: Num a => Qu (Nil :+ C) a
 coulomb = UnsafeQu 1
-
+invCoulomb :: Num a => Qu (Nil :- C) a
+invCoulomb = UnsafeQu 1
 baseCoulomb :: UnitCoercion (Nil :+ C) (Nil :+ S :+ A)
 baseCoulomb = UnsafeUnitCoercion
 
 volt :: Num a => Qu (Nil :+ V) a
 volt = UnsafeQu 1
-
+invVolt :: Num a => Qu (Nil :- V) a
+invVolt = UnsafeQu 1
 baseVolt :: UnitCoercion (Nil :+ V) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S :- A)
 baseVolt = UnsafeUnitCoercion
 
 farad :: Num a => Qu (Nil :+ F) a
 farad = UnsafeQu 1
-
+invFarad :: Num a => Qu (Nil :- F) a
+invFarad = UnsafeQu 1
 baseFarad :: UnitCoercion (Nil :+ F) (Nil :-: BvN 3 Deca :- G :- M :- M :+: BvN 4 S :+ A :+ A)
 baseFarad = UnsafeUnitCoercion
 
 ohm :: Num a => Qu (Nil :+ Ohm) a
 ohm = UnsafeQu 1
-
+invOhm :: Num a => Qu (Nil :- Ohm) a
+invOhm = UnsafeQu 1
 baseOhm :: UnitCoercion (Nil :+ Ohm) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S :- A :- A)
 baseOhm = UnsafeUnitCoercion
 
 siemens :: Num a => Qu (Nil :+ Si) a
 siemens = UnsafeQu 1
-
+invSiemens :: Num a => Qu (Nil :- Si) a
+invSiemens = UnsafeQu 1
 baseSiemens :: UnitCoercion (Nil :+ Si) (Nil :-: BvN 3 Deca :- G :- M :- M :+: BvN 3 S :+ A :+ A)
 baseSiemens = UnsafeUnitCoercion
 
 weber :: Num a => Qu (Nil :+ Wb) a
 weber = UnsafeQu 1
-
+invWeber :: Num a => Qu (Nil :- Wb) a
+invWeber = UnsafeQu 1
 baseWeber :: UnitCoercion (Nil :+ Wb) (BvN 3 Deca :+ G :+ M :+ M :- S :- S :- A)
 baseWeber = UnsafeUnitCoercion
 
 telsa :: Num a => Qu (Nil :+ T) a
 telsa = UnsafeQu 1
-
+invTelsa :: Num a => Qu (Nil :- T) a
+invTelsa = UnsafeQu 1
 baseTelsa :: UnitCoercion (Nil :+ T) (BvN 3 Deca :+ G :- S :- S :- A)
 baseTelsa = UnsafeUnitCoercion
 
 henry :: Num a => Qu (Nil :+ H) a
 henry = UnsafeQu 1
-
+invHenry :: Num a => Qu (Nil :- H) a
+invHenry = UnsafeQu 1
 baseHenry :: UnitCoercion (Nil :+ H) (BvN 3 Deca :+ G :+ M :+ M :- S :- S :- A :- A)
 baseHenry = UnsafeUnitCoercion
 
 lumen :: Num a => Qu (Nil :+ Lm) a
 lumen = UnsafeQu 1
-
+invLumen :: Num a => Qu (Nil :- Lm) a
+invLumen = UnsafeQu 1
 baseLumen :: UnitCoercion (Nil :+ Lm) (Nil :+ Cd :+ Sr)
 baseLumen = UnsafeUnitCoercion
 
 lux :: Num a => Qu (Nil :+ Lx) a
 lux = UnsafeQu 1
-
+invLux :: Num a => Qu (Nil :- Lx) a
+invLux = UnsafeQu 1
 baseLux :: UnitCoercion (Nil :+ Lx) (Nil :- M :- M :+ Cd)
 baseLux = UnsafeUnitCoercion
 
 becquerel :: Num a => Qu (Nil :+ Bq) a
 becquerel = UnsafeQu 1
-
+invBecquerel :: Num a => Qu (Nil :- Bq) a
+invBecquerel = UnsafeQu 1
 baseBecquerel :: UnitCoercion (Nil :+ Bq) (Nil :- S)
 baseBecquerel = UnsafeUnitCoercion
 
 gray :: Num a => Qu (Nil :+ Gy) a
 gray = UnsafeQu 1
-
+invGray :: Num a => Qu (Nil :- Gy) a
+invGray = UnsafeQu 1
 baseGray :: UnitCoercion (Nil :+ Gy) (Nil :+ M :+ M :- S :- S)
 baseGray = UnsafeUnitCoercion
 
 sievert :: Num a => Qu (Nil :+ Sv) a
 sievert = UnsafeQu 1
-
+invSievert :: Num a => Qu (Nil :- Sv) a
+invSievert = UnsafeQu 1
 baseSievert :: UnitCoercion (Nil :+ Sv) (Nil :+ M :+ M :- S :- S)
 baseSievert = UnsafeUnitCoercion
 
 katal :: Num a => Qu (Nil :+ Kat) a
 katal = UnsafeQu 1
-
+invKatal :: Num a => Qu (Nil :- Kat) a
+invKatal = UnsafeQu 1
 baseKatal :: UnitCoercion (Nil :+ Kat) (Nil :+ Mol :- S)
 baseKatal = UnsafeUnitCoercion
 
@@ -393,18 +428,22 @@ yoctoPer = perYotta
 -----
 
 speedOfLight :: Num a => Qu (Nil :+ M :- S) a
-speedOfLight = UnsafeQu 299792458
+speedOfLight = 299792458 `timesQu` meter `timesQu` invSecond
 
 gravitationalConstant ::
     Fractional a =>
     Qu (Nil :+: BvN 3 M :-: BvN 3 Deca :- G :- S :- S) a
-gravitationalConstant = UnsafeQu 6.6743015e-11
+gravitationalConstant =
+    6.6743015e-11
+      `timesQu` (meter `timesQu` meter `timesQu` meter)
+      `overQu` (kilo `timesQu` gram)
+      `overQu` (second `timesQu` second)
 
 planckConstant :: _
 planckConstant = quRational 6.62607015e-34 `timesQu` joule `timesQu` second
 
 electricConstant :: Fractional a => Qu (Nil :+ F :- M) a
-electricConstant = UnsafeQu 8.854187812813e-12
+electricConstant = 8.854187812813e-12 `timesQu` farad `overQu` meter
 
 boltzmannConstant :: _
 boltzmannConstant = quRational 1.380649e-23 `timesQu` joule `overQu` kelvin
@@ -412,12 +451,12 @@ boltzmannConstant = quRational 1.380649e-23 `timesQu` joule `overQu` kelvin
 -----
 
 planckMass :: Fractional a => Qu (BvN 3 Deca :+ G) a
-planckMass = UnsafeQu 2.17643524e-8
+planckMass = 2.17643524e-8 `timesQu` kilo `timesQu` gram
 
 -----
 
 avogadroNumber :: Num a => Qu (Nil :- Mol) a
-avogadroNumber = UnsafeQu $ 602214076 * 10^(15 :: Int)
+avogadroNumber = (602214076 * 10^(15 :: Int)) `timesQu` invMole
 
 idealGasConstant :: _
 idealGasConstant = quRational 8.31446261815324 `timesQu` joule `overQu` kelvin `overQu` mole

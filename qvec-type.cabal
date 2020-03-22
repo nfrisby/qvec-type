@@ -51,6 +51,8 @@ executable smoke
     Givens
     Wanteds
 
+    UomPluginTests
+
   build-depends:
       base
     , dump-plugin
