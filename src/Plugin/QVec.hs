@@ -7,17 +7,18 @@ module Plugin.QVec (
   tcPlugin,
   ) where
 
-import           Control.Monad (guard)
+import           Control.Monad (foldM, guard)
 import           Data.Either (partitionEithers)
 import qualified Data.Map as Map
 import           Data.IORef
 import           Data.List (intersperse, sortOn)
-
+import           Data.Maybe (maybeToList)
+import           GHC.Real (denominator, numerator)
 import qualified GhcPlugins
 import           Outputable ((<+>), ppr, text)
 import qualified TcPluginM
 import qualified TcRnMonad
-import           TcRnTypes (Ct)
+import           TcRnTypes (Ct, Xi)
 import qualified TcRnTypes
 import           TcType (TcKind, TcTyVar, TcType)
 import           TcUnify (swapOverTyVars)
@@ -26,6 +27,7 @@ import           VarSet
 import           UniqSet
 
 import           GHCAPI
+import           GHCAPI.DetCmpType (detCmpType)
 import           Plugin.QVec.Types
 
 -- | 'tcPlugin' with 'GhcPlugins.purePlugin' set
@@ -52,10 +54,10 @@ tcPlugin = TcRnTypes.TcPlugin
 
 tcPluginInit :: TcPluginM.TcPluginM InitEnv
 tcPluginInit = do
-    ieDecls <- do
-      modul <- lookupModule "Data.QVec"
-      let luTC = lookupTC modul
+    modul <- lookupModule "Data.QVec"
+    let luTC = lookupTC modul
 
+    ieDecls <- do
       dQVec <- luTC "QVec"
       let luDC s = GhcPlugins.promoteDataCon <$> lookupDC dQVec s
 
@@ -73,6 +75,22 @@ tcPluginInit = do
 
       pure MkDecls{..}
 
+    ieDeclsCoords <- do
+      dCoords <- luTC "Coords"
+      let luDC s = GhcPlugins.promoteDataCon <$> lookupDC dCoords s
+
+      dConsCoords <- luDC "ConsCoords"
+      dNilCoords <- luDC "NilCoords"
+      dToCoords <- luTC "ToCoords"
+
+      dSign <- luTC "Sign"
+      let luSignDC s = GhcPlugins.promoteDataCon <$> lookupDC dSign s
+
+      dNeg <- luSignDC "Neg"
+      dPos <- luSignDC "Pos"
+
+      pure MkDeclsCoords{..}
+
     ieInvocationCount <- TcPluginM.tcPluginIO $ newIORef 0
 
     pure MkInitEnv{..}
@@ -85,6 +103,7 @@ tcPluginSolve MkInitEnv{..} gs ds ws = do
     envDynFlags <- TcRnTypes.unsafeTcPluginTcM GhcPlugins.getDynFlags
     envLevel <- TcRnTypes.unsafeTcPluginTcM TcRnMonad.getTcLevel
     let envDecls = ieDecls
+        envDeclsCoords = ieDeclsCoords
         envInvocationCount = ieInvocationCount
     pluginSolve MkEnv{..} gs ds ws
 
@@ -148,6 +167,8 @@ pluginSolve env gs ds ws = do
             ,
               tyeqReplace = replaceWantedEq
             } env wFuneqs ws
+        `orElse`
+          reduceToCoords env wFuneqs ws
 
     putSDoc env $ ppr res
     pure (tcPluginResult res)
@@ -277,6 +298,67 @@ canonicalizeFmvs env allFuneqs ds ws = do
 
                 -- the new Wanted: @lhs ~ fmv (CFunEq)@
                 replaceWantedFunEq env funeq fat
+
+-- | Reduce 'Data.QVec.ToCoords' applications when all the non-zero
+-- vector indices can be sorted by 'detCmpType'
+
+reduceToCoords :: Env -> VarEnv FunEq -> [Ct] -> TcPluginM.TcPluginM Result
+reduceToCoords env funeqs ws = do
+    putSDoc env $ text $ "----- Reducing coords -----"
+
+    let Cts{funeqsCoords} = partitionCts env ws
+    
+    foldForM (GhcPlugins.nonDetEltsUFM funeqsCoords) $ \funeqCoords -> do
+      let MkFunEqCoords{..} = funeqCoords
+
+          mbCoords :: Maybe [(Xi, Rational)]
+          mbCoords = (>>= sortBs) $ case fec_lhs of
+              FunArgBv1 e -> Just $ singletonQVec e
+              FunArgNil   -> Just mempty
+              FunArgVar v -> dropKind <$> mkQVec env funeqs emptyVarEnv v
+
+          sortBs :: QVec -> Maybe [(Xi, Rational)]
+          sortBs (MkQVec vs bs) = do
+              guard $ Map.null vs
+              foldM (flip insert) []
+                [ (e, q) | (MkNDXi e, q) <- Map.toList bs ]
+            where
+              -- INVARIANT second argument is deterministically sorted
+              insert ::
+                  (Xi, Rational) -> [(Xi, Rational)] -> Maybe [(Xi, Rational)]
+              insert new = \case
+                []       -> Just [new]
+                old:olds -> detCmpType (fst new) (fst old) >>= \case
+                    LT -> Just $ new : old : olds
+                    EQ -> error "impossible!"
+                    GT -> (old :) <$> insert new olds
+
+      putSDoc env $ ppr fec_lhs
+      case mbCoords of
+        Nothing     -> pure mempty
+        Just coords -> do
+            putSDoc env $
+              ppr [ (t, numerator q, denominator q) | (t, q) <- coords ]
+
+            let rhs = foldr cons nil coords
+                nil = tycon dNilCoords [fec_kind]
+                cons (e, q) acc =
+                    tycon dConsCoords [fec_kind, sign, n, d, e, acc]
+                  where
+                    sign = GhcPlugins.mkTyConTy $ if q < 0 then dNeg else dPos
+                    n = nat $ abs $ numerator q
+                    d = nat $ abs $ denominator q
+
+            let tv = GhcPlugins.mkTyVarTy fec_rhs
+            replaceWantedEq fec_ct
+              (funeqCoordsType env funeqCoords) tv
+              tv rhs
+  where
+    MkEnv{..} = env
+    MkDeclsCoords{..} = envDeclsCoords
+
+    nat = GhcPlugins.mkNumLitTy . fromIntegral
+    tycon = GhcPlugins.mkTyConApp
 
 {------------------------------------------------------------------------------
     Shared logic
@@ -439,6 +521,8 @@ data Cts = Cts
 
       nonFuneqs :: [Ct]
     ,
+      funeqsCoords :: VarEnv FunEqCoords
+    ,
       tyeqs :: VarEnv TyEq
     ,
       -- | May contain 'TcRnTypes.CFunEqCan's and 'TcRnTypes.CTyEqCan's
@@ -454,15 +538,23 @@ partitionCts env cts = Cts{..}
     funeqs =
         mkVarEnv [ (fe_rhs, funeq) | funeq@MkFunEq{..} <- funeqsL ]
 
+    funeqsCoords :: VarEnv FunEqCoords
+    funeqsCoords =
+        mkVarEnv
+          [ (fec_rhs, funeq) | funeq@MkFunEqCoords{..} <- funeqsCoordsL ]
+
     tyeqs :: VarEnv TyEq
     tyeqs =
         mkVarEnv [ (te_lhs, tyeq) | tyeq@MkTyEq{..} <- tyeqsL ]
 
     funeqsL :: [FunEq]
+    funeqsCoordsL :: [FunEqCoords]
     tyeqsL :: [TyEq]
     nonFuneqs :: [Ct]
     others :: [Ct]
     (funeqsL, nonFuneqs) = partitionEithers
         [ maybe (Right ct) Left $ prjFunEq env ct | ct <- cts]
+    funeqsCoordsL =
+        [ funeq | ct <- cts, funeq <- maybeToList (prjFunEqCoords env ct) ]
     (tyeqsL, others) = partitionEithers
         [ maybe (Right ct) Left $ prjTyEq env ct | ct <- nonFuneqs]

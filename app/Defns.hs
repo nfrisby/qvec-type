@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 {-# OPTIONS_GHC -fplugin=Plugin.QVec #-}
 
@@ -112,6 +113,16 @@ pFoo _ = Proxy
 
 -----
 
+concreteCoords :: ConcreteCoords a => Proxy a -> ()
+concreteCoords _ = ()
+
+class ConcreteCoords (a :: Coords *)
+
+instance ConcreteCoords NilCoords
+instance ConcreteCoords coords => ConcreteCoords (ConsCoords sign n d k coords)
+
+-----
+
 -- | The SI base units with one exception.
 --
 --   * We use gram instead of kilogram.
@@ -119,7 +130,7 @@ pFoo _ = Proxy
 data SIb =
       Sb | Mb | Gb | Ab | Kb | Molb | Cdb
 
--- | The SI base and derived units with three exceptions.
+-- | The SI base and derived units, with three exceptions
 --
 --   * We use gram instead of kilogram.
 --
@@ -129,6 +140,16 @@ data SIb =
 --   * We also include the SI prefix 'Deca' as a dimensionless
 --     \"derived unit\"; this basis vector serves to collect all of
 --     the various prefixes.
+--
+-- TODO add minute and hour?
+--
+-- TODO add hectare and liter and metric ton?
+--
+-- TODO add arc degree, arc minute, and arc second?
+--
+-- TODO add neper, bel, and decibel?
+--
+-- TODO add important irrationals, like pi?
 
 data SI =
       S | M | G | A | K | Mol | Cd
@@ -143,41 +164,65 @@ data SI =
     |
       Deca
 
+-- This poor link is the only discussion I could find :(
+-- <https://www.quora.com/Is-there-a-conventional-unit-ordering-in-the-International-System-of-Units-for-compound-units>
+
+type instance ShowsUnitPriority SI = DefaultShowsUnitPriority
+
+namedPriority :: Rational
+namedPriority = -4
+
+instance ShowUnit S where
+  showsUnitPriority = mkShowsUnitPriority (-1)
+  showsUnit = mkShowsUnit $ \_p -> showString "s"
 second :: Num a => Qu (Nil :+ S) a
 second = UnsafeQu 1
 invSecond :: Num a => Qu (Nil :- S) a
 invSecond = UnsafeQu 1
 
+instance ShowUnit M where
+  showsUnitPriority = mkShowsUnitPriority (-2)
+  showsUnit = mkShowsUnit $ \_p -> showString "m"
 meter :: Num a => Qu (Nil :+ M) a
 meter = UnsafeQu 1
 invMeter :: Num a => Qu (Nil :- M) a
 invMeter = UnsafeQu 1
 
+instance ShowUnit G where
+  showsUnitPriority = mkShowsUnitPriority (-3)
+  showsUnit = mkShowsUnit $ \_p -> showString "g"
 gram :: Num a => Qu (Nil :+ G) a
 gram = UnsafeQu 1
 invGram :: Num a => Qu (Nil :- G) a
 invGram = UnsafeQu 1
 
+instance ShowUnit A where showsUnit = mkShowsUnit $ \_p -> showString "A"
 ampere :: Num a => Qu (Nil :+ A) a
 ampere = UnsafeQu 1
 invAmpere :: Num a => Qu (Nil :- A) a
 invAmpere = UnsafeQu 1
 
+instance ShowUnit K where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "K"
 kelvin :: Num a => Qu (Nil :+ K) a
 kelvin = UnsafeQu 1
 invKelvin :: Num a => Qu (Nil :- K) a
 invKelvin = UnsafeQu 1
 
+instance ShowUnit Mol where showsUnit = mkShowsUnit $ \_p -> showString "mol"
 mole :: Num a => Qu (Nil :+ Mol) a
 mole = UnsafeQu 1
 invMole :: Num a => Qu (Nil :- Mol) a
 invMole = UnsafeQu 1
 
+instance ShowUnit Cd where showsUnit = mkShowsUnit $ \_p -> showString "cd"
 candela :: Num a => Qu (Nil :+ Cd) a
 candela = UnsafeQu 1
 invCandela :: Num a => Qu (Nil :- Cd) a
 invCandela = UnsafeQu 1
 
+instance ShowUnit Rad where showsUnit = mkShowsUnit $ \_p -> showString "rad"
 radian :: Num a => Qu (Nil :+ Rad) a
 radian = UnsafeQu 1
 invRadian :: Num a => Qu (Nil :- Rad) a
@@ -185,6 +230,7 @@ invRadian = UnsafeQu 1
 baseRadian :: UnitCoercion (Nil :+ Rad) Nil
 baseRadian = UnsafeUnitCoercion
 
+instance ShowUnit Sr where showsUnit = mkShowsUnit $ \_p -> showString "sr"
 steradian :: Num a => Qu (Nil :+ Sr) a
 steradian = UnsafeQu 1
 invSteradian :: Num a => Qu (Nil :- Sr) a
@@ -192,6 +238,9 @@ invSteradian = UnsafeQu 1
 baseSteradian :: UnitCoercion (Nil :+ Sr) Nil
 baseSteradian = UnsafeUnitCoercion
 
+instance ShowUnit Hz where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Hz"
 hertz :: Num a => Qu (Nil :+ Hz) a
 hertz = UnsafeQu 1
 invHertz :: Num a => Qu (Nil :- Hz) a
@@ -199,6 +248,9 @@ invHertz = UnsafeQu 1
 baseHertz :: UnitCoercion (Nil :+ Hz) (Nil :+ S)
 baseHertz = UnsafeUnitCoercion
 
+instance ShowUnit N where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "N"
 newton :: Num a => Qu (Nil :+ N) a
 newton = UnsafeQu 1
 invNewton :: Num a => Qu (Nil :- N) a
@@ -206,6 +258,9 @@ invNewton = UnsafeQu 1
 baseNewton :: UnitCoercion (Nil :+ N) (BvN 3 Deca :+ G :+ M :- S :- S)
 baseNewton = UnsafeUnitCoercion
 
+instance ShowUnit Pa where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Pa"
 pascal :: Num a => Qu (Nil :+ Pa) a
 pascal = UnsafeQu 1
 invPascal :: Num a => Qu (Nil :- Pa) a
@@ -213,6 +268,9 @@ invPascal = UnsafeQu 1
 basePascal :: UnitCoercion (Nil :+ Pa) (BvN 3 Deca :+ G :- M :- S :- S)
 basePascal = UnsafeUnitCoercion
 
+instance ShowUnit J where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "J"
 joule :: Num a => Qu (Nil :+ J) a
 joule = UnsafeQu 1
 invJoule :: Num a => Qu (Nil :- J) a
@@ -220,6 +278,9 @@ invJoule = UnsafeQu 1
 baseJoule :: UnitCoercion (Nil :+ J) (BvN 3 Deca :+ G :+ M :+ M :- S :- S)
 baseJoule = UnsafeUnitCoercion
 
+instance ShowUnit W where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "W"
 watt :: Num a => Qu (Nil :+ W) a
 watt = UnsafeQu 1
 invWatt :: Num a => Qu (Nil :- W) a
@@ -227,6 +288,9 @@ invWatt = UnsafeQu 1
 baseWatt :: UnitCoercion (Nil :+ W) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S)
 baseWatt = UnsafeUnitCoercion
 
+instance ShowUnit C where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "C"
 coulomb :: Num a => Qu (Nil :+ C) a
 coulomb = UnsafeQu 1
 invCoulomb :: Num a => Qu (Nil :- C) a
@@ -234,6 +298,9 @@ invCoulomb = UnsafeQu 1
 baseCoulomb :: UnitCoercion (Nil :+ C) (Nil :+ S :+ A)
 baseCoulomb = UnsafeUnitCoercion
 
+instance ShowUnit V where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "V"
 volt :: Num a => Qu (Nil :+ V) a
 volt = UnsafeQu 1
 invVolt :: Num a => Qu (Nil :- V) a
@@ -241,6 +308,9 @@ invVolt = UnsafeQu 1
 baseVolt :: UnitCoercion (Nil :+ V) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S :- A)
 baseVolt = UnsafeUnitCoercion
 
+instance ShowUnit F where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "F"
 farad :: Num a => Qu (Nil :+ F) a
 farad = UnsafeQu 1
 invFarad :: Num a => Qu (Nil :- F) a
@@ -248,6 +318,9 @@ invFarad = UnsafeQu 1
 baseFarad :: UnitCoercion (Nil :+ F) (Nil :-: BvN 3 Deca :- G :- M :- M :+: BvN 4 S :+ A :+ A)
 baseFarad = UnsafeUnitCoercion
 
+instance ShowUnit Ohm where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Ω"
 ohm :: Num a => Qu (Nil :+ Ohm) a
 ohm = UnsafeQu 1
 invOhm :: Num a => Qu (Nil :- Ohm) a
@@ -255,6 +328,9 @@ invOhm = UnsafeQu 1
 baseOhm :: UnitCoercion (Nil :+ Ohm) (BvN 3 Deca :+ G :+ M :+ M :-: BvN 3 S :- A :- A)
 baseOhm = UnsafeUnitCoercion
 
+instance ShowUnit Si where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "S"
 siemens :: Num a => Qu (Nil :+ Si) a
 siemens = UnsafeQu 1
 invSiemens :: Num a => Qu (Nil :- Si) a
@@ -262,6 +338,9 @@ invSiemens = UnsafeQu 1
 baseSiemens :: UnitCoercion (Nil :+ Si) (Nil :-: BvN 3 Deca :- G :- M :- M :+: BvN 3 S :+ A :+ A)
 baseSiemens = UnsafeUnitCoercion
 
+instance ShowUnit Wb where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Wb"
 weber :: Num a => Qu (Nil :+ Wb) a
 weber = UnsafeQu 1
 invWeber :: Num a => Qu (Nil :- Wb) a
@@ -269,6 +348,9 @@ invWeber = UnsafeQu 1
 baseWeber :: UnitCoercion (Nil :+ Wb) (BvN 3 Deca :+ G :+ M :+ M :- S :- S :- A)
 baseWeber = UnsafeUnitCoercion
 
+instance ShowUnit T where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "T"
 telsa :: Num a => Qu (Nil :+ T) a
 telsa = UnsafeQu 1
 invTelsa :: Num a => Qu (Nil :- T) a
@@ -276,6 +358,9 @@ invTelsa = UnsafeQu 1
 baseTelsa :: UnitCoercion (Nil :+ T) (BvN 3 Deca :+ G :- S :- S :- A)
 baseTelsa = UnsafeUnitCoercion
 
+instance ShowUnit H where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "H"
 henry :: Num a => Qu (Nil :+ H) a
 henry = UnsafeQu 1
 invHenry :: Num a => Qu (Nil :- H) a
@@ -283,6 +368,7 @@ invHenry = UnsafeQu 1
 baseHenry :: UnitCoercion (Nil :+ H) (BvN 3 Deca :+ G :+ M :+ M :- S :- S :- A :- A)
 baseHenry = UnsafeUnitCoercion
 
+instance ShowUnit Lm where showsUnit = mkShowsUnit $ \_p -> showString "lm"
 lumen :: Num a => Qu (Nil :+ Lm) a
 lumen = UnsafeQu 1
 invLumen :: Num a => Qu (Nil :- Lm) a
@@ -290,6 +376,7 @@ invLumen = UnsafeQu 1
 baseLumen :: UnitCoercion (Nil :+ Lm) (Nil :+ Cd :+ Sr)
 baseLumen = UnsafeUnitCoercion
 
+instance ShowUnit Lx where showsUnit = mkShowsUnit $ \_p -> showString "lx"
 lux :: Num a => Qu (Nil :+ Lx) a
 lux = UnsafeQu 1
 invLux :: Num a => Qu (Nil :- Lx) a
@@ -297,6 +384,9 @@ invLux = UnsafeQu 1
 baseLux :: UnitCoercion (Nil :+ Lx) (Nil :- M :- M :+ Cd)
 baseLux = UnsafeUnitCoercion
 
+instance ShowUnit Bq where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Bq"
 becquerel :: Num a => Qu (Nil :+ Bq) a
 becquerel = UnsafeQu 1
 invBecquerel :: Num a => Qu (Nil :- Bq) a
@@ -304,6 +394,9 @@ invBecquerel = UnsafeQu 1
 baseBecquerel :: UnitCoercion (Nil :+ Bq) (Nil :- S)
 baseBecquerel = UnsafeUnitCoercion
 
+instance ShowUnit Gy where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Gy"
 gray :: Num a => Qu (Nil :+ Gy) a
 gray = UnsafeQu 1
 invGray :: Num a => Qu (Nil :- Gy) a
@@ -311,6 +404,9 @@ invGray = UnsafeQu 1
 baseGray :: UnitCoercion (Nil :+ Gy) (Nil :+ M :+ M :- S :- S)
 baseGray = UnsafeUnitCoercion
 
+instance ShowUnit Sv where
+  showsUnitPriority = mkShowsUnitPriority namedPriority
+  showsUnit = mkShowsUnit $ \_p -> showString "Sv"
 sievert :: Num a => Qu (Nil :+ Sv) a
 sievert = UnsafeQu 1
 invSievert :: Num a => Qu (Nil :- Sv) a
@@ -318,12 +414,17 @@ invSievert = UnsafeQu 1
 baseSievert :: UnitCoercion (Nil :+ Sv) (Nil :+ M :+ M :- S :- S)
 baseSievert = UnsafeUnitCoercion
 
+instance ShowUnit Kat where showsUnit = mkShowsUnit $ \_p -> showString "kat"
 katal :: Num a => Qu (Nil :+ Kat) a
 katal = UnsafeQu 1
 invKatal :: Num a => Qu (Nil :- Kat) a
 invKatal = UnsafeQu 1
 baseKatal :: UnitCoercion (Nil :+ Kat) (Nil :+ Mol :- S)
 baseKatal = UnsafeUnitCoercion
+
+instance ShowUnit Deca where
+  showsUnit = mkShowsUnit $ \_p -> showString "10"
+  showsUnitPriority = mkShowsUnitPriority (-1000000)
 
 yotta    :: Num a => Qu (BvN 24 Deca) a
 yotta    = UnsafeQu 1

@@ -1,6 +1,11 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ExplicitNamespaces #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -27,9 +32,17 @@ module Data.QVec (
   -- * Conversion
   Coords (..),
   ToCoords,
+  -- * Miscellany
+  KnownSign (..),
+  Sign (..),
+  SSign (..),
+  signVal,
   ) where
 
-import           GHC.TypeNats (Nat)
+import           GHC.Generics (Generic)
+import           Data.Data (Data)
+import           Data.Type.Equality ((:~:) (..), TestEquality (..))
+import           GHC.TypeLits
 
 {------------------------------------------------------------------------------
     Signature
@@ -117,10 +130,40 @@ data Coords k =
       -- | The /next/ non-zero coordinate
       --
       -- INVARIANT: the numerator and denominator are both not @0@.
-      --
-      -- INVARIANT: the @Bool@ is the sign of the numerator, @True@
-      -- for positive.
 
-      ConsCoords Bool Nat Nat k (Coords k)
+      ConsCoords Sign Nat Nat k (Coords k)
 
 type family ToCoords (v :: QVec k) :: Coords k where {}
+
+data Sign = Neg | Pos
+  deriving (Data, Eq, Generic, Ord, Show)
+
+data SSign :: Sign -> * where
+  SNeg :: SSign Neg
+  SPos :: SSign Pos
+
+class KnownSign (s :: Sign) where signSing :: SSign s
+
+instance KnownSign Neg where signSing = SNeg
+instance KnownSign Pos where signSing = SPos
+
+signVal :: forall sign proxy. KnownSign sign => proxy sign -> Sign
+signVal _prx = case signSing :: SSign sign of
+    SNeg -> Neg
+    SPos -> Pos
+
+instance TestEquality SSign where
+  testEquality SNeg SNeg = Just Refl
+  testEquality SPos SPos = Just Refl
+  testEquality _       _       = Nothing
+
+instance Eq (SSign s) where
+  _ == _ = True
+
+instance Ord (SSign s) where
+  compare _ _ = EQ
+
+instance Show (SSign s) where
+  show = \case
+    SNeg -> "SNeg"
+    SPos -> "SPos"

@@ -33,7 +33,7 @@ infixl 6 *:, /:
 
 infixl 5 +:, -:
 
-mk :: a -> Qu u a
+mk :: a -> Qu (Nil :: QVec SI) a
 mk = mkQu
 
 (+:) :: Num a => Qu u a -> Qu u a -> Qu u a
@@ -62,8 +62,10 @@ forceOnGround = coerceUnit (symUnitCoercion baseNewton) $ gravityOnEarth *: myMa
 inMetresPerSecond :: a -> Quantity a (Nil :+ M :- S)
 inMetresPerSecond = UnsafeQu
 
-showQu :: Qu u a -> String
-showQu _ = ""
+showQu ::
+    (Ord (ShowsUnitPriority k), Show a, ShowUnits (ToCoords u)) =>
+    Qu (u :: QVec k) a -> String
+showQu = show
 
 attract
     :: Fractional a
@@ -200,17 +202,20 @@ _ @?= _ = ()
 
 tests :: TestTree
 tests = testGroup "uom-plugin"
-  [ {- testGroup "Showing constants"
-    [ testCase "show 3m"                 $ show (3 *: meter)              @?= "[u| 3 m |]"
-    , testCase "show 3m/s"               $ show [u| 3 m/s |]              @?= "[u| 3 m / s |]"
-    , testCase "show 3.2 s^2"            $ show [u| 3.2 s^2 |]            @?= "[u| 3.2 s^2 |]"
-    , testCase "show 3.0 kg m^2 / m s^2" $ show [u| 3.0 kg m^2 / m s^2 |] @?= "[u| 3.0 kg m / s^2 |]"
-    , testCase "show 1"                  $ show (mk 1)                    @?= "[u| 1 |]"
-    , testCase "show 1 s^-1"             $ show [u| 1 s^-1 |]             @?= "[u| 1 s^-1 |]"
-    , testCase "show 2 1 / kg s"         $ show [u| 2 1 / kg s |]         @?= "[u| 2 kg^-1 s^-1 |]"
-    , testCase "show (1 % 2) kg"         $ show [u| 1 % 2 kg |]           @?= "[u| 0.5 kg |]"
+  [ testGroup "Showing constants"
+    [ testCase "show 3m"                 $ show (3 *: meter)               @?= "[u| 3 m |]"
+    , testCase "show 3m/s"               $ show (3 *: meter /: second)     @?= "[u| 3 m / s |]"
+    , testCase "show 3.2 s^2"            $ show (3.2 *: second *: second)  @?= "[u| 3.2 s^2 |]"
+    , testCase "show 3.0 kg m^2 / m s^2" $ show (3.0 *: kilo *: gram *: meter *: meter /: meter *: second *: second)
+                                                                           @?= "[u| 3.0 kg m / s^2 |]"
+    , testCase "show 1"                  $ show (mk 1)                     @?= "[u| 1 |]"
+    , testCase "show 1 s^-1"             $ show (1 /: second)              @?= "[u| 1 s^-1 |]"
+    , testCase "show 2 1 / kg s"         $ show (2 *: milli *: invGram *: second)
+                                                                           @?= "[u| 2 kg^-1 s^-1 |]"
+    , testCase "show (1 % 2) kg"         $ show (quRational 0.5 *: kilo *: gram)
+                                                                           @?= "[u| 0.5 kg |]"
     ]
-  , -} testGroup "Basic operations"
+  , testGroup "Basic operations"
     [ testCase "2 + 2"                   $ (2 *: second) +: (2 *: second)        @?= (4 *: second)
     , testCase "in m/s"                  $ inMetresPerSecond 5             @?= (5 *: meter *: invSecond)
     , testCase "mean"                    $ mean [ 2 *: newton, 4 *: newton ] @?= (3 *: newton)

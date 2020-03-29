@@ -43,6 +43,7 @@ library
 
   other-modules:
     GHCAPI
+    GHCAPI.DetCmpType
 
   build-depends:
       base

@@ -12,6 +12,7 @@ module Plugin.QVec.Types (
   -- *
   Env (..),
   Decls (..),
+  DeclsCoords (..),
   InitEnv (..),
   -- *
   QVec (..),
@@ -38,6 +39,10 @@ module Plugin.QVec.Types (
   funeqType,
   prjFunEq,
   prjTyEq,
+  -- *
+  FunEqCoords (..),
+  funeqCoordsType,
+  prjFunEqCoords,
   -- *
   Result (..),
   emitCt,
@@ -87,6 +92,8 @@ data Env = MkEnv
     {
       envDecls :: !Decls
     ,
+      envDeclsCoords :: !DeclsCoords
+    ,
       envDynFlags :: !GhcPlugins.DynFlags
     ,
       -- | How any times the plugin has been invoked
@@ -101,6 +108,8 @@ data Env = MkEnv
 data InitEnv = MkInitEnv
     {
       ieDecls :: !Decls
+    ,
+      ieDeclsCoords :: !DeclsCoords
     ,
       ieInvocationCount :: !(IORef Int)
     }
@@ -140,6 +149,20 @@ data Decls = MkDecls
       dScN :: !TyCon
     }
 
+data DeclsCoords = MkDeclsCoords
+    {
+      dCoords :: !TyCon
+    ,
+      dConsCoords :: !TyCon
+    ,
+      dNeg :: !TyCon
+    ,
+      dNilCoords :: !TyCon
+    ,
+      dPos :: !TyCon
+    ,
+      dToCoords :: !TyCon
+    }
 {------------------------------------------------------------------------------
     Syntactic form
 ------------------------------------------------------------------------------}
@@ -203,6 +226,8 @@ data FunArg v =
       FunArgNil
     |
       FunArgVar !v
+  deriving (Foldable, Functor, Traversable)
+
 
 instance GhcPlugins.Outputable (f TcTyVar) => GhcPlugins.Outputable (FunApp f) where
   ppr = \case
@@ -483,7 +508,8 @@ canSumTree (CanSum vs es) = case map injV vs ++ map injE es of
     Isolated canonical constraints
 ------------------------------------------------------------------------------}
 
--- | A funeq that potentially interests us
+-- | A funeq that potentially interests us because it uses the
+-- "Data.QVec" signature
 
 data FunEq = MkFunEq
     {
@@ -598,13 +624,14 @@ prjFunArg env@MkEnv{..} t =
     tyvar = GhcPlugins.getTyVar_maybe
     tycon = GhcPlugins.splitTyConApp_maybe
 
--- | The type of the LHS of the CFunEq.
+-- | The LHS as a type
 
 funeqType :: Env -> FunEq -> Xi
 funeqType env MkFunEq{..} =
     funAppType env fe_kind funArgType fe_lhs
 
--- | A tyeq that potentially interests us
+-- | A tyeq that potentially interests us because it involves the
+-- "Data.QVec" signature
 
 data TyEq = MkTyEq
     {
@@ -638,6 +665,57 @@ prjTyEq env ct = do
     (te_kind, te_rhs) <- prjFunArg env cc_rhs
 
     pure MkTyEq{..}
+
+-- | A funeq that potentially interests us because it involves a
+-- "Data.QVec" conversion
+
+data FunEqCoords = MkFunEqCoords
+    {
+      fec_ct :: TcRnTypes.Ct
+    ,
+      fec_ev :: TcRnTypes.CtEvidence
+    ,
+      fec_rhs :: TcTyVar
+    ,
+      fec_kind :: TcKind
+    ,
+      fec_lhs :: FunArg TcTyVar
+    }
+
+instance GhcPlugins.Outputable FunEqCoords where
+  ppr MkFunEqCoords{..} = text "FunEqCoords" <+> ppr fec_ev <+> text "is" <+> ppr fec_kind <+> ppr fec_rhs <+> ppr fec_lhs
+
+prjFunEqCoords :: Env -> TcRnTypes.Ct -> Maybe FunEqCoords
+prjFunEqCoords env ct = do
+    TcRnTypes.CFunEqCan{..} <- pure ct
+
+    let fec_ct = ct
+        fec_ev = cc_ev
+        fec_rhs = cc_fsk
+
+    (fec_kind, fec_lhs) <- prjFunAppCoordsTyConArgs env (cc_fun, cc_tyargs)
+
+    pure MkFunEqCoords{..}
+
+prjFunAppCoordsTyConArgs :: Env -> (TyCon, [Xi]) -> Maybe (TcKind, FunArg TcTyVar)
+prjFunAppCoordsTyConArgs env@MkEnv{..} (tc, args) =
+        (do
+          guard $ tc == dToCoords
+          [k, t] <- pure args
+          (_k, t') <- prjFunArg env t
+          pure (k, t'))
+  where
+    MkDeclsCoords{..} = envDeclsCoords
+
+-- | The LHS as a type
+
+funeqCoordsType :: Env -> FunEqCoords -> Xi
+funeqCoordsType env@MkEnv{..} MkFunEqCoords{..} =
+    tycon dToCoords [fec_kind, funArgType env fec_kind fec_lhs]
+  where
+    MkDeclsCoords{..} = envDeclsCoords
+
+    tycon = GhcPlugins.mkTyConApp
 
 {------------------------------------------------------------------------------
     Parsing QVec
