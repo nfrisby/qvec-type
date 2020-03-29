@@ -117,7 +117,7 @@ pluginSolve env gs ds ws = do
 
     let gFuneqs = funeqs
           where
-            Cts{funeqs} = partitionCts env (gs ++ ds ++ ws)
+            Cts{funeqs} = partitionCts env gs
     let wFuneqs = funeqs
           where
             Cts{funeqs} = partitionCts env (gs ++ ds ++ ws)
