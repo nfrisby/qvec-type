@@ -151,10 +151,7 @@ pluginSolve env gs ds ws = do
           where
             Cts{funeqs} = partitionCts env (gs ++ ds ++ ws)
 
-    res <-
-          canonicalizeFsks env gs
-        `orElse`
-          simplifyEqualities MkTyEqEnv
+    let gTyEqEnv = MkTyEqEnv
             {
               tyeqFlavor = Given
             ,
@@ -162,11 +159,9 @@ pluginSolve env gs ds ws = do
             ,
               tyeqReplace = \ct _old_lhs _old_rhs lhs rhs ->
                 replaceGivenEq ct lhs rhs
-            } env gFuneqs gs
-        `orElse`
-          canonicalizeFmvs env wFuneqs ds ws
-        `orElse`
-          simplifyEqualities MkTyEqEnv
+            }
+
+    let wTyEqEnv = MkTyEqEnv
             {
               tyeqFlavor = Wanted
             ,
@@ -176,7 +171,20 @@ pluginSolve env gs ds ws = do
                   lhs rhs
             ,
               tyeqReplace = replaceWantedEq
-            } env wFuneqs ws
+            }
+
+    res <-
+          canonicalizeFsks env gs
+        `orElse`
+          simplifyEqualities improveEquality1 gTyEqEnv env gFuneqs gs
+        `orElse`
+          simplifyEqualities improveEquality2 gTyEqEnv env gFuneqs gs
+        `orElse`
+          canonicalizeFmvs env wFuneqs ds ws
+        `orElse`
+          simplifyEqualities improveEquality1 wTyEqEnv env wFuneqs ws
+        `orElse`
+          simplifyEqualities improveEquality2 wTyEqEnv env wFuneqs ws
         `orElse`
           reduceToCoords env wFuneqs ws
 
@@ -421,8 +429,9 @@ data TyEqEnv = MkTyEqEnv
 -- | Try to derive equivalences from TyEqs
 
 simplifyEqualities ::
+    (TyEqEnv -> Env -> TyEq -> QVec -> TcPluginM.TcPluginM Result) ->
     TyEqEnv -> Env -> VarEnv FunEq -> [Ct] -> TcPluginM.TcPluginM Result
-simplifyEqualities tyeqEnv env funeqs ws = do
+simplifyEqualities improve tyeqEnv env funeqs ws = do
     let MkTyEqEnv{tyeqFlavor} = tyeqEnv
 
     putSDoc env $ text $ "----- Simplifying " <> show tyeqFlavor <> " eqs -----"
@@ -443,10 +452,7 @@ simplifyEqualities tyeqEnv env funeqs ws = do
 
       foldForM mbQVec $ \zm -> do
         putSDoc env $ ppr (qVecTree zm)
-        id $
-            improveEquality1 tyeqEnv env tyeq zm
-          `orElse`
-            improveEquality2 tyeqEnv env tyeq zm
+        improve tyeqEnv env tyeq zm
          
 -- | Improve equalities that have vector variables
 --
