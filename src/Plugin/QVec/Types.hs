@@ -17,11 +17,15 @@ module Plugin.QVec.Types (
   InitEnv (..),
   -- *
   QVec (..),
+  interpretQVec,
   mkQVec,
   minusQVec,
   negateQVec,
+  popQVec,
+  projectQVec,
   scaleQVec,
   singletonQVec,
+  substQVec,
   varQVec,
   -- *
   FunApp (..),
@@ -46,7 +50,7 @@ module Plugin.QVec.Types (
   prjFunEqCoords,
   -- *
   FunEqFixCoord (..),
-  funeqFixCoordType,
+  fixCoordTyConArgs,
   prjFunEqFixCoord,
   -- *
   Result (..),
@@ -58,6 +62,7 @@ module Plugin.QVec.Types (
   -- *
   NDVar (..),
   NDXi (..),
+  apart,
   balance,
   dropKind,
   foldForM,
@@ -76,19 +81,23 @@ import           Control.Applicative ((<|>))
 import           Control.Monad (guard)
 import           Data.Foldable (fold)
 import           Data.IORef (IORef)
+import           Data.List (sortOn)
 import           Data.Map (Map)
 import qualified Data.Map as Map
+import           Data.Set (Set)
 import           GHC.Natural (Natural)
 import           GHC.Real (Ratio (..), numerator, denominator)
 
-import           GhcPlugins ((<+>), parens, ppr, text)
 import qualified GhcPlugins
+import           Outputable ((<+>), parens, ppr, text)
 import qualified TcEvidence
 import           TcRnTypes (Xi)
 import qualified TcRnTypes
 import           TcType (TcKind, TcLevel, TcTyVar)
 import qualified TcType
+import           TcUnify (swapOverTyVars)
 import           TyCon (TyCon)
+import qualified Unify
 import           Unique (getUnique, nonDetCmpUnique)
 import           VarEnv
 import           VarSet
@@ -448,6 +457,62 @@ singletonQVec t = MkQVec Map.empty (Map.singleton (MkNDXi t) 1)
 varQVec :: TcTyVar -> QVec
 varQVec v = MkQVec (Map.singleton (MkNDVar v) 1) Map.empty
 
+-- | Interpret a QVec as an equality
+
+interpretQVec :: QVec -> Maybe (TcTyVar, QVec)
+interpretQVec zm@(MkQVec vs _es) =
+    foldl snoc Nothing (sortOn cmp $ Map.toList vs)
+  where
+    cmp (v, q) = (abs q, v)
+
+    snoc acc (MkNDVar v, q) =
+        if not better then acc else
+        Just (v, varQVec v `minusQVec` (recip q `scaleQVec` zm))
+      where
+        better = case acc of
+            Nothing          -> True
+            Just (old_v, _q) -> swapOverTyVars old_v v
+
+data Acc_substQVec a b = MkAcc_substQVec !VarSet !QVec
+
+substQVec :: VarEnv QVec -> QVec -> (VarSet, QVec)
+substQVec sigma
+    -- optimization
+  | isEmptyVarEnv sigma = \zm -> (emptyVarSet, zm)
+
+  | otherwise = \zm@(MkQVec vs _es) ->
+    unwrap $
+    foldl snoc (MkAcc_substQVec emptyVarSet zm) (Map.toList vs)
+  where
+    unwrap (MkAcc_substQVec hits zm) = (hits, zm)
+
+    snoc acc@(MkAcc_substQVec hits zm) (MkNDVar v, q) =
+        case lookupVarEnv sigma v of
+          Nothing  -> acc
+          Just zm' -> MkAcc_substQVec (extendVarSet hits v) $
+              (<> scaleQVec q zm') $
+              (`minusQVec` scaleQVec q (varQVec v)) $
+              zm
+
+-- | Separate the basis vector components that are equal to the given
+-- basis vector
+
+popQVec :: Xi -> QVec -> (Rational, QVec)
+popQVec e (MkQVec vs es) =
+    (Map.findWithDefault 0 k es, MkQVec vs (Map.delete k es))
+  where
+    k = MkNDXi e
+
+-- | Discard the basis vector components that are apart from and the
+-- given basis vector
+
+projectQVec :: Xi -> QVec -> (Set NDXi, QVec)
+projectQVec e (MkQVec vs es) =
+    (Map.keysSet hits, MkQVec vs es')
+  where
+    (hits, es') = Map.partitionWithKey predicate es
+    predicate (MkNDXi e') _q = apart e e'
+
 qVecTree :: QVec -> Tree TcTyVar
 qVecTree zm = canSumTree (qVecCanSum zm)
 
@@ -777,16 +842,14 @@ prjFunEqFixCoord env@MkEnv{..} ct = do
     MkDeclsFixCoord{..} = envDeclsFixCoord
     nat = fmap fromInteger . GhcPlugins.isNumLitTy
 
--- | The LHS as a type
-
-funeqFixCoordType :: Env -> FunEqFixCoord -> Xi
-funeqFixCoordType env@MkEnv{..} MkFunEqFixCoord{..} =
-    tycon dFixCoord [fefc_kind, nat n, nat d, e, funArgType env fefc_kind t]
+fixCoordTyConArgs ::
+    Env -> TcType.Kind -> (Integer, Integer, Xi, QVec) -> (TyCon, [Xi])
+fixCoordTyConArgs env@MkEnv{..} k (n, d, e, zm) =
+    tycon dFixCoord [k, nat n, nat d, e, treeType env k (qVecTree zm)]
   where
     MkDeclsFixCoord{..} = envDeclsFixCoord
 
-    (n, d, e, t) = fefc_lhs
-    tycon = GhcPlugins.mkTyConApp
+    tycon = (,)
     nat = GhcPlugins.mkNumLitTy . fromIntegral
 
 {------------------------------------------------------------------------------
@@ -923,6 +986,11 @@ munless = mwhen . not
 
 dropKind :: (TcKind, a) -> a
 dropKind (_k, x) = x
+
+-- | Check if two types can never be made equal via any unifier.
+
+apart :: TcType.TcType -> TcType.TcType -> Bool
+apart l r = Unify.typesCantMatch [(l,r)]
 
 -- | A 'TcType.TcLevel' depth no reasonable program will ever reach
 

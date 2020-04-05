@@ -1,4 +1,6 @@
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -9,19 +11,20 @@ module Plugin.QVec (
 
 import           Control.Monad (foldM, guard)
 import           Data.Either (partitionEithers)
+import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.IORef
-import           Data.List (intersperse, sortOn)
+import           Data.List (intersperse)
 import           Data.Maybe (maybeToList)
 import           GHC.Real (denominator, numerator)
+
 import qualified GhcPlugins
-import           Outputable ((<+>), ppr, text)
+import           Outputable (($$), (<+>), ppr, text)
 import qualified TcPluginM
 import qualified TcRnMonad
 import           TcRnTypes (Ct, Xi)
 import qualified TcRnTypes
 import           TcType (TcKind, TcTyVar, TcType)
-import           TcUnify (swapOverTyVars)
 import           VarEnv
 import           VarSet
 import           UniqSet
@@ -144,9 +147,9 @@ pluginSolve env gs ds ws = do
       filter (not . null) $
       [gs, ds, ws]
 
-    let gFuneqs = funeqs
+    let (gFuneqs, gFuneqsFixCoord, gOthers) = (funeqs, funeqsFixCoord, others)
           where
-            Cts{funeqs} = partitionCts env gs
+            Cts{funeqs, funeqsFixCoord, others} = partitionCts env gs
     let wFuneqs = funeqs
           where
             Cts{funeqs} = partitionCts env (gs ++ ds ++ ws)
@@ -173,26 +176,41 @@ pluginSolve env gs ds ws = do
               tyeqReplace = replaceWantedEq
             }
 
-    res <-
-          canonicalizeFsks env gs
-        `orElse`
-          simplifyEqualities improveEquality1 gTyEqEnv env gFuneqs gs
-        `orElse`
-          simplifyEqualities improveEquality2 gTyEqEnv env gFuneqs gs
-        `orElse`
-          canonicalizeFmvs env wFuneqs ds ws
-        `orElse`
-          simplifyEqualities improveEquality1 wTyEqEnv env wFuneqs ws
-        `orElse`
-          simplifyEqualities improveEquality2 wTyEqEnv env wFuneqs ws
-        `orElse`
-          reduceToCoords env wFuneqs ws
+    res <- runPipeline $
+        Stage (canonicalizeFsks env gs) $
+        Stage (simplifyEqualities improveEquality1 gTyEqEnv env gFuneqs gs) $
+        Bind  (simplifyEqualitiesFixCoord env gFuneqs gFuneqsFixCoord gOthers) $ \_sigma ->
+        Stage (simplifyEqualities improveEquality2 gTyEqEnv env gFuneqs gs) $
+        Stage (canonicalizeFmvs env wFuneqs ds ws) $
+        Stage (simplifyEqualities improveEquality1 wTyEqEnv env wFuneqs ws) $
+        Stage (simplifyEqualities improveEquality2 wTyEqEnv env wFuneqs ws) $
+        Stage (reduceToCoords env wFuneqs ws) $
+        Done
 
     putSDoc env $ ppr res
     pure (tcPluginResult res)
 
 tcPluginStop :: InitEnv -> TcPluginM.TcPluginM ()
 tcPluginStop _initEnv = pure ()
+
+data Pipeline =
+      Done
+    |
+      Stage (TcPluginM.TcPluginM Result) Pipeline
+    |
+      forall a. Bind (TcPluginM.TcPluginM (a, Result)) (a -> Pipeline)
+
+runPipeline :: Pipeline -> TcPluginM.TcPluginM Result
+runPipeline = go
+  where
+    go = \case
+        Done      -> pure mempty
+        Stage m k -> do
+          r <- m
+          if nullResult r then go k else pure r
+        Bind m k -> do
+          (a, r) <- m
+          if nullResult r then go (k a) else pure r
 
 {------------------------------------------------------------------------------
     Simplifying givens
@@ -337,7 +355,7 @@ reduceToCoords env funeqs ws = do
 
           sortBs :: QVec -> Maybe [(Xi, Rational)]
           sortBs (MkQVec vs bs) = do
-              guard $ Map.null vs
+              guard $ null vs
               foldM (flip insert) []
                 [ (e, q) | (MkNDXi e, q) <- Map.toList bs ]
             where
@@ -377,6 +395,197 @@ reduceToCoords env funeqs ws = do
 
     nat = GhcPlugins.mkNumLitTy . fromIntegral
     tycon = GhcPlugins.mkTyConApp
+
+
+{------------------------------------------------------------------------------
+    Canonicalizing given FixCoord equalities
+------------------------------------------------------------------------------}
+
+data Acc_simplifyEqualitiesFixCoord = MkAcc_simplifyEqualitiesFixCoord
+  !Bool
+
+  -- ^ whether any two work-in-progress constraints have interacted
+
+  !(Map NDXi (VarEnv QVec))
+
+  -- ^ the work-in-progress substitutions
+
+  ![(Ct, FunEqFixCoord, QVec, Bool)]
+
+  -- ^ the work-in-progress equality constraints
+  --
+  -- The 'Ct' is a 'TcRnTypes.CTyEqCan' where the LHS is an
+  -- application of 'Data.QVec.FixCoord' (hence the 'FunEqFixCoord')
+  -- and the RHS is 'Data.QVec.MkProved'.
+  --
+  -- The 'QVec' already includes all 'FunEqFixCoord' arguments: it is
+  -- the vector minus the scaled basis vector.
+  --
+  -- The 'Bool' indicates whether the underlying 'TcRnTypes.CFunEqCan'
+  -- needs to be updated; see the @inner@ loop for details.
+
+simplifyEqualitiesFixCoord ::
+    Env -> VarEnv FunEq -> VarEnv FunEqFixCoord -> [Ct] ->
+    TcPluginM.TcPluginM (Map NDXi (VarEnv QVec), Result)
+simplifyEqualitiesFixCoord env funeqs funeqsFixCoord others = do
+    putSDoc env $ text $ "----- Simplifying FixCoord eqs -----"
+
+    let eqs =
+            [ (ct, funeq, zm, False)
+            | ct@TcRnTypes.CTyEqCan{..} <- others
+            , (funeq, zm) <- maybeToList $ do
+                guard $ cc_rhs `GhcPlugins.eqType` mkProved
+                funeq@MkFunEqFixCoord{..} <- lookupVarEnv funeqsFixCoord cc_tyvar
+                let (n, d, e0, t) = fefc_lhs
+                    constant =
+                        scaleQVec (fromIntegral n / fromIntegral d) $
+                        singletonQVec e0
+                zm <- case t of
+                  FunArgBv1 e -> pure $ singletonQVec e
+                  FunArgNil   -> pure mempty
+                  FunArgVar v -> dropKind <$> mkQVec env funeqs emptyVarEnv v
+                pure (funeq, zm `minusQVec` constant)
+            ]
+
+    putSDoc env $ ppr eqs
+
+    putSDoc env $ text "---"
+
+    outer emptyAcc eqs
+  where
+    MkEnv{..} = env
+    MkDeclsFixCoord{..} = envDeclsFixCoord
+
+    mkProved = GhcPlugins.mkTyConTy dMkProved
+
+    emptyAcc = MkAcc_simplifyEqualitiesFixCoord False Map.empty []
+
+    outer acc eqs =
+        -- repeat until no constraints interact
+        if flag then do putSDoc env (text "Looping"); outer emptyAcc inert_eqs
+                else do
+          -- emit updated constraints
+          r <- foldForM inert_eqs $ \(ct, funeq, zm, eqflag) ->
+            mwhen eqflag $ do
+              putSDoc env $ text "Simplifying" $$ ppr ct $$ ppr funeq $$ ppr zm
+              let MkFunEqFixCoord{..} = funeq
+                  (_n, _d, e0, _t) = fefc_lhs
+
+                  -- TODO for total completeness, we should
+                  -- technically have another stage in the plugin
+                  -- pipeline which applies the sigmas to any
+                  -- FunEqFixCoord, even if that FunEqFixCoord doesn't
+                  -- occur in a CTyEqCan with a MkProved RHS. I
+                  -- haven't done that yet, because I don't anticipate
+                  -- it ever being useful. However, if we were to do
+                  -- that, then this computation of @(n', d', zm')@
+                  -- likely belongs there, to be re-used here.
+
+                  -- separate the 'QVec' into the arguments of the
+                  -- 'FunEqFixCoord'
+                  --
+                  -- > 0 ~ zm
+                  -- >   iff
+                  -- > -q_e ~ zm_less_e
+                  -- >   iff
+                  -- > n'/d' e ~ zm_less_e
+                  (n', d', zm') = case compare n1 0 of
+
+                      LT -> (negate n1, d1, negateQVec zm_less_e)
+
+                      EQ -> (0, 0, zm_less_e)
+                        -- TODO when to negateQVec in this EQ case?
+                        -- The inversion or lack thereof might prevent
+                        -- a G from matching a W...
+                        --
+                        -- TODO Once we're inverting here, we should
+                        -- also figure out how to set @eqflag@ when
+                        -- inversion is necessary (ie add this as
+                        -- @hit4@).
+
+                      GT -> (n1, d1, zm_less_e)
+
+                    where
+                      n1 = numerator q1; d1 = denominator q1
+
+                      -- -q_e ~ zm_less_e   iff   q1 ~ zm_less_e
+                      q1 = negate q_e
+
+                      -- 0 ~ zm   iff   -q_e ~ zm_less_e
+                      (q_e, zm_less_e) = popQVec e0 zm
+                      
+              -- Note that @n'@ and @d'@ might be the same as @_n@ and
+              -- @_d@, but if so then some other part of the
+              -- constraint must have changed, since @eqflag@ is set.
+
+              if
+
+                -- tautology
+                --
+                -- Recall that zm includes the (-n / d * e0) summand.
+
+                | mempty == zm -> do
+                  putSDoc env $ text "Tautology"
+                  replaceGivenEq fefc_ct
+                    (GhcPlugins.mkTyVarTy fefc_rhs) mkProved
+
+                -- contradiction
+                --
+                -- Recall that zm' is zm without the (-n / d * e0)
+                -- summand. If the e0 coefficient is also 0, then the
+                -- previous case would have handled it.
+
+                | mempty == zm' -> do
+                  putSDoc env $ text "Contradiction"
+                  pure $ Result $ TcRnTypes.TcPluginContradiction [ct]
+
+                | otherwise -> do
+                  putSDoc env $ text "Simpler"
+                  replaceGivenFunEqFixCoord env funeq (n', d', e0, zm')
+
+          pure (sigmas, r)
+      where
+        MkAcc_simplifyEqualitiesFixCoord flag sigmas inert_eqs = inner acc eqs
+
+    inner acc = \case
+        []       -> acc
+        eq : eqs -> do
+            let (ct, funeq@MkFunEqFixCoord{..}, zm0, eqflag) = eq
+                (n, d, e0, _t) = fefc_lhs
+
+            let sigma = Map.findWithDefault emptyVarEnv (MkNDXi e0) sigmas
+                (hits1, zm1) = substQVec sigma zm0
+                hit1 = not $ isEmptyVarSet hits1
+
+                (hits2, zm2) = projectQVec e0 zm1
+                hit2 = not $ null hits2
+
+                hit3 = q /= negate (fromIntegral n / fromIntegral d)
+                  where
+                    (q, _zm3) = popQVec e0 zm1
+
+                eqflag' =
+                    eqflag
+                    || hit1   -- a variable occurrence was eliminated
+
+                    || hit2   -- an apart basis vector was eliminated
+
+                    || hit3   -- the focused basis vector needs to be
+                              -- consolidated into the 'FunEqFixCoord'
+
+            let sigma' = case interpretQVec zm2 of
+                    Nothing       -> sigma
+                    Just (v, rhs) -> extendVarEnv sigma v rhs
+
+            let acc' = MkAcc_simplifyEqualitiesFixCoord
+                    (flag || hit1)
+                    (if isEmptyVarEnv sigma' then sigmas else
+                     Map.insert (MkNDXi e0) sigma' sigmas)
+                    ((ct, funeq, zm2, eqflag') : inert_eqs)
+
+            inner acc' eqs
+      where
+        MkAcc_simplifyEqualitiesFixCoord flag sigmas inert_eqs = acc
 
 {------------------------------------------------------------------------------
     Shared logic
@@ -469,38 +678,26 @@ simplifyEqualities improve tyeqEnv env funeqs ws = do
 
 improveEquality1 ::
     TyEqEnv -> Env -> TyEq -> QVec -> TcPluginM.TcPluginM Result
-improveEquality1 MkTyEqEnv{..} env MkTyEq{..} zm@(MkQVec vs _bs) = do
-    munless (Map.null vs) $
-      go Nothing (sortOn cmp $ Map.toList vs)
+improveEquality1 MkTyEqEnv{..} env MkTyEq{..} zm@(MkQVec vs _bs) =
+    munless (null vs) $
+    foldForM (interpretQVec zm) $ \(v, zm') ->
+      if v == te_lhs
+      then pure mempty
+      else do
+        let rhs_tree = qVecTree zm'
+        let v' = case rhs_tree of
+                TreeNil{} -> v
+                TreeBv1{} -> v
+                TreeFun{} -> antiSwapMasquerade v
+                TreeVar{} -> v
+        putSDoc env $ text "Rearrange" <+> ppr v' <+> ppr rhs_tree <+> ppr zm
+        tyeqReplace te_ct
+          (GhcPlugins.mkTyVarTy te_lhs)
+          (funArgType env te_kind te_rhs)
+          (GhcPlugins.mkTyVarTy v')
+          (treeType env te_kind rhs_tree)
   where
     MkEnv{..} = env
-
-    cmp (v, q) = (abs q, v)
-
-    go acc = \case
-        [] -> foldForM acc $ \(v, q) ->
-          if v == te_lhs
-          then pure mempty
-          else do
-            let rhs_tree =
-                    qVecTree $ varQVec v `minusQVec` (recip q `scaleQVec` zm)
-            let v' = case rhs_tree of
-                    TreeNil{} -> v
-                    TreeBv1{} -> v
-                    TreeFun{} -> antiSwapMasquerade v
-                    TreeVar{} -> v
-            putSDoc env $ text "Rearrange" <+> ppr v' <+> ppr rhs_tree <+> ppr zm
-            tyeqReplace te_ct
-              (GhcPlugins.mkTyVarTy te_lhs)
-              (funArgType env te_kind te_rhs)
-              (GhcPlugins.mkTyVarTy v')
-              (treeType env te_kind rhs_tree)
-
-        (MkNDVar v, q) : vis -> go (if better then Just (v, q) else acc) vis
-          where
-            better = case acc of
-                Nothing         -> True
-                Just (old_v, _q) -> swapOverTyVars old_v v
 
 -- | Improve equalities that do not have vector variables
 --
@@ -516,7 +713,7 @@ improveEquality1 MkTyEqEnv{..} env MkTyEq{..} zm@(MkQVec vs _bs) = do
 improveEquality2 ::
     TyEqEnv -> Env -> TyEq -> QVec -> TcPluginM.TcPluginM Result
 improveEquality2 MkTyEqEnv{..} _env MkTyEq{..} (MkQVec vs bs) =
-    mwhen (Map.null vs) $
+    mwhen (null vs) $
     case balance apartNDXi pos neg of
       Nothing -> pure $ Result $ TcRnTypes.TcPluginContradiction [te_ct]
       Just pairs -> foldForM pairs $ \(MkNDXi lhs, MkNDXi rhs) -> do
@@ -528,6 +725,10 @@ improveEquality2 MkTyEqEnv{..} _env MkTyEq{..} (MkQVec vs bs) =
     (pos, neg) = partitionPosNeg bs
 
     apartNDXi (MkNDXi l) (MkNDXi r) = apart l r
+
+{------------------------------------------------------------------------------
+    Partitions constraints
+------------------------------------------------------------------------------}
 
 data Cts = Cts
     {

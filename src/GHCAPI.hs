@@ -21,7 +21,6 @@ import qualified TyCon
 import           TcType (TcType)
 import qualified TcType
 import           TcUnify (canSolveByUnification)
-import qualified Unify
 
 import           Plugin.QVec.Types
 
@@ -72,11 +71,6 @@ emitNewDerivedEq loc lhs rhs = do
       (GhcPlugins.mkPrimEqPredRole TyCon.Nominal lhs rhs)
     pure $ emitCt $ TcRnTypes.mkNonCanonical ctev
 
--- | Check if two types can never be made equal via any unifier.
-
-apart :: TcType -> TcType -> Bool
-apart l r = Unify.typesCantMatch [(l,r)]
-
 -- | Check if GHC's constraint solver will certainly solve the given
 -- assignment by actually writing to the tyvar
 --
@@ -108,10 +102,20 @@ replaceGivenEq ct lhs rhs = do
 
 replaceGivenFunEq ::
     Env -> FunEq -> FunApp Tree -> TcRnTypes.TcPluginM Result
-replaceGivenFunEq env funeq@MkFunEq{..} fat =
-    replaceFunEq deriveGivenEv solve env funeq fat
+replaceGivenFunEq env MkFunEq{..} fat =
+    replaceFunEq deriveGivenEv solve fe_ct fe_rhs
+      (funAppTyConArgs env fe_kind treeType fat)
   where
     solve _new_ev = solveGiven fe_ct
+
+replaceGivenFunEqFixCoord ::
+    Env -> FunEqFixCoord -> (Integer, Integer, TcRnTypes.Xi, QVec) ->
+    TcRnTypes.TcPluginM Result
+replaceGivenFunEqFixCoord env MkFunEqFixCoord{..} args =
+    replaceFunEq deriveGivenEv solve fefc_ct fefc_rhs
+      (fixCoordTyConArgs env fefc_kind args)
+  where
+    solve _new_ev = solveGiven fefc_ct
 
 deriveGivenEv ::
     Ct -> TcType -> TcType ->
@@ -143,7 +147,8 @@ deriveGivenEv ct lhs rhs = do
 replaceWantedFunEq ::
     Env -> FunEq -> FunApp Tree -> TcRnTypes.TcPluginM Result
 replaceWantedFunEq env funeq@MkFunEq{..} fat =
-    replaceFunEq deriveWantedEv solve env funeq fat
+    replaceFunEq deriveWantedEv solve fe_ct fe_rhs
+      (funAppTyConArgs env fe_kind treeType fat)
   where
     solve new_ev = solveWantedEq fe_ct
         (funeqType env funeq)
@@ -204,13 +209,14 @@ replaceFunEq ::
     ) {- ^ create the new evidence -} ->
     ( CtEvidence -> Result
     ) {- ^ solve the old constraint from the new evidence -} ->
-    Env -> FunEq -> FunApp Tree -> TcRnTypes.TcPluginM Result
-replaceFunEq deriveEv solve env MkFunEq{..} fat = do
+    Ct -> TcType.TcTyVar -> (TyCon.TyCon, [TcRnTypes.Xi]) ->
+    TcRnTypes.TcPluginM Result
+replaceFunEq deriveEv solve ct tv (tc, args) = do
     new_ev <- let
-      lhs = funAppType env fe_kind treeType fat
-      rhs = GhcPlugins.mkTyVarTy fe_rhs
+      lhs = GhcPlugins.mkTyConApp tc args
+      rhs = GhcPlugins.mkTyVarTy tv
       in
-      deriveEv fe_ct lhs rhs
+      deriveEv ct lhs rhs
 
     -- If we just use 'TcRnTypes.mkNonCanonical' here, then GHC first
     -- flattens the LHS to create a fresh flatvar, and then introduces
@@ -230,9 +236,7 @@ replaceFunEq deriveEv solve env MkFunEq{..} fat = do
               -- will rectify that right away
               cc_tyargs = args
             ,
-              cc_fsk = fe_rhs
+              cc_fsk = tv
             }
-          where
-            (tc, args) = funAppTyConArgs env fe_kind treeType fat
 
     pure $ solve new_ev <> emitCt new_ct
