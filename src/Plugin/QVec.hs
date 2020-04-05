@@ -91,6 +91,15 @@ tcPluginInit = do
 
       pure MkDeclsCoords{..}
 
+    ieDeclsFixCoord <- do
+      dProved <- luTC "Proved"
+      let luDC s = GhcPlugins.promoteDataCon <$> lookupDC dProved s
+
+      dFixCoord <- luTC "FixCoord"
+      dMkProved <- luDC "MkProved"
+
+      pure MkDeclsFixCoord{..}
+
     ieInvocationCount <- TcPluginM.tcPluginIO $ newIORef 0
 
     pure MkInitEnv{..}
@@ -104,6 +113,7 @@ tcPluginSolve MkInitEnv{..} gs ds ws = do
     envLevel <- TcRnTypes.unsafeTcPluginTcM TcRnMonad.getTcLevel
     let envDecls = ieDecls
         envDeclsCoords = ieDeclsCoords
+        envDeclsFixCoord = ieDeclsFixCoord
         envInvocationCount = ieInvocationCount
     pluginSolve MkEnv{..} gs ds ws
 
@@ -523,6 +533,8 @@ data Cts = Cts
     ,
       funeqsCoords :: VarEnv FunEqCoords
     ,
+      funeqsFixCoord :: VarEnv FunEqFixCoord
+    ,
       tyeqs :: VarEnv TyEq
     ,
       -- | May contain 'TcRnTypes.CFunEqCan's and 'TcRnTypes.CTyEqCan's
@@ -543,6 +555,11 @@ partitionCts env cts = Cts{..}
         mkVarEnv
           [ (fec_rhs, funeq) | funeq@MkFunEqCoords{..} <- funeqsCoordsL ]
 
+    funeqsFixCoord :: VarEnv FunEqFixCoord
+    funeqsFixCoord =
+        mkVarEnv
+          [ (fefc_rhs, funeq) | funeq@MkFunEqFixCoord{..} <- funeqsFixCoordL ]
+
     tyeqs :: VarEnv TyEq
     tyeqs =
         mkVarEnv [ (te_lhs, tyeq) | tyeq@MkTyEq{..} <- tyeqsL ]
@@ -556,5 +573,7 @@ partitionCts env cts = Cts{..}
         [ maybe (Right ct) Left $ prjFunEq env ct | ct <- cts]
     funeqsCoordsL =
         [ funeq | ct <- cts, funeq <- maybeToList (prjFunEqCoords env ct) ]
+    funeqsFixCoordL =
+        [ funeq | ct <- cts, funeq <- maybeToList (prjFunEqFixCoord env ct) ]
     (tyeqsL, others) = partitionEithers
         [ maybe (Right ct) Left $ prjTyEq env ct | ct <- nonFuneqs]

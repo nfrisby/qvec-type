@@ -13,6 +13,7 @@ module Plugin.QVec.Types (
   Env (..),
   Decls (..),
   DeclsCoords (..),
+  DeclsFixCoord (..),
   InitEnv (..),
   -- *
   QVec (..),
@@ -43,6 +44,10 @@ module Plugin.QVec.Types (
   FunEqCoords (..),
   funeqCoordsType,
   prjFunEqCoords,
+  -- *
+  FunEqFixCoord (..),
+  funeqFixCoordType,
+  prjFunEqFixCoord,
   -- *
   Result (..),
   emitCt,
@@ -94,6 +99,8 @@ data Env = MkEnv
     ,
       envDeclsCoords :: !DeclsCoords
     ,
+      envDeclsFixCoord :: !DeclsFixCoord
+    ,
       envDynFlags :: !GhcPlugins.DynFlags
     ,
       -- | How any times the plugin has been invoked
@@ -110,6 +117,8 @@ data InitEnv = MkInitEnv
       ieDecls :: !Decls
     ,
       ieDeclsCoords :: !DeclsCoords
+    ,
+      ieDeclsFixCoord :: !DeclsFixCoord
     ,
       ieInvocationCount :: !(IORef Int)
     }
@@ -163,6 +172,14 @@ data DeclsCoords = MkDeclsCoords
     ,
       dToCoords :: !TyCon
     }
+
+data DeclsFixCoord = MkDeclsFixCoord
+    {
+      dFixCoord :: !TyCon
+    ,
+      dMkProved :: !TyCon
+    }
+
 {------------------------------------------------------------------------------
     Syntactic form
 ------------------------------------------------------------------------------}
@@ -716,6 +733,61 @@ funeqCoordsType env@MkEnv{..} MkFunEqCoords{..} =
     MkDeclsCoords{..} = envDeclsCoords
 
     tycon = GhcPlugins.mkTyConApp
+
+-- | A funeq for 'FixCoord'
+
+data FunEqFixCoord = MkFunEqFixCoord
+    {
+      fefc_ct :: TcRnTypes.Ct
+    ,
+      fefc_ev :: TcRnTypes.CtEvidence
+    ,
+      fefc_rhs :: TcTyVar
+    ,
+      fefc_kind :: TcKind
+    ,
+      fefc_lhs :: (Natural, Natural, Xi, FunArg TcTyVar)
+    }
+
+instance GhcPlugins.Outputable FunEqFixCoord where
+  ppr MkFunEqFixCoord{..} = text "FunEqFixCoord" <+> ppr fefc_ev <+> text "is" <+> ppr fefc_kind <+> ppr fefc_rhs <+> ppr lhs
+    where
+      (n, d, e, t) = fefc_lhs
+      lhs = (toInteger n, toInteger d, e, t)
+
+prjFunEqFixCoord :: Env -> TcRnTypes.Ct -> Maybe FunEqFixCoord
+prjFunEqFixCoord env@MkEnv{..} ct = do
+    TcRnTypes.CFunEqCan{..} <- pure ct
+
+    let fefc_ct = ct
+        fefc_ev = cc_ev
+        fefc_rhs = cc_fsk
+
+    (fefc_kind, fefc_lhs) <- do
+        guard $ cc_fun == dFixCoord
+        [k, n, d, e, t] <- pure cc_tyargs
+        n' <- nat n
+        d' <- nat d
+        (_k, t') <- prjFunArg env t
+        pure (k, (n', d', e, t'))
+
+    pure MkFunEqFixCoord{..}
+
+  where
+    MkDeclsFixCoord{..} = envDeclsFixCoord
+    nat = fmap fromInteger . GhcPlugins.isNumLitTy
+
+-- | The LHS as a type
+
+funeqFixCoordType :: Env -> FunEqFixCoord -> Xi
+funeqFixCoordType env@MkEnv{..} MkFunEqFixCoord{..} =
+    tycon dFixCoord [fefc_kind, nat n, nat d, e, funArgType env fefc_kind t]
+  where
+    MkDeclsFixCoord{..} = envDeclsFixCoord
+
+    (n, d, e, t) = fefc_lhs
+    tycon = GhcPlugins.mkTyConApp
+    nat = GhcPlugins.mkNumLitTy . fromIntegral
 
 {------------------------------------------------------------------------------
     Parsing QVec

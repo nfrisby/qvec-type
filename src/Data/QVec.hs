@@ -29,11 +29,14 @@ module Data.QVec (
   ScN, 
   BvQ, 
   BvN,
+  -- * Constraint
+  FixCoord,
   -- * Conversion
   Coords (..),
   ToCoords,
   -- * Miscellany
   KnownSign (..),
+  Proved (..),
   Sign (..),
   SSign (..),
   signVal,
@@ -167,3 +170,16 @@ instance Show (SSign s) where
   show = \case
     SNeg -> "SNeg"
     SPos -> "SPos"
+
+{------------------------------------------------------------------------------
+    Constraints
+------------------------------------------------------------------------------}
+
+data Proved = MkProved
+
+-- | Fix a basis coordinate
+--
+-- This family is uninterpretable unless the naturals are both
+-- literals and the denominator is zero iff the numerator is zero.
+
+type family FixCoord (n :: Nat) (d :: Nat) (e :: k) (v :: QVec k) :: Proved where {}
