@@ -72,6 +72,8 @@ executable smoke
 
     UomPluginTests
 
+    Variants
+
   build-depends:
       base
     , dump-plugin

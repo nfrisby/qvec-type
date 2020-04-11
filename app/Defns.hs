@@ -58,6 +58,12 @@ pList _ = Proxy
 pMaybe :: Proxy a -> Proxy (Maybe a)
 pMaybe _ = Proxy
 
+pInt :: Proxy Int
+pInt = Proxy
+
+pChar :: Proxy Char
+pChar = Proxy
+
 pNil :: Proxy Nil
 pNil = Proxy
 
@@ -78,6 +84,12 @@ pScN _ _ = Proxy
 
 pScQ :: Proxy n -> Proxy d -> Proxy v -> Proxy (ScQ n d v)
 pScQ _ _ _ = Proxy
+
+pFixCoord :: Proxy n -> Proxy d -> Proxy e -> Proxy v -> Proxy (FixCoord n d e v)
+pFixCoord _ _ _ _ = Proxy
+
+pMkProved :: Proxy MkProved
+pMkProved = Proxy
 
 infixl 0 .~.
 

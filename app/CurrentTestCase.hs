@@ -1,8 +1,11 @@
 {-# OPTIONS_GHC -fplugin=Plugin.QVec #-}
 
--- | For testing one Given-focsed example at a time.
+-- | For testing one focused example at a time
 
 module CurrentTestCase where
 
+-- import           Defns
+
 main :: IO ()
-main = pure ()
+main = do
+    pure ()

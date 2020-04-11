@@ -14,8 +14,11 @@ import           Data.Either (partitionEithers)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.IORef
-import           Data.List (intersperse)
+import           Data.List (intersperse, subsequences)
+import           Data.List.NonEmpty (NonEmpty, nonEmpty)
+import qualified Data.List.NonEmpty as NE
 import           Data.Maybe (maybeToList)
+import qualified Data.Set as Set
 import           GHC.Real (denominator, numerator)
 
 import qualified GhcPlugins
@@ -27,6 +30,7 @@ import qualified TcRnTypes
 import           TcType (TcKind, TcTyVar, TcType)
 import           VarEnv
 import           VarSet
+import qualified Unify
 import           UniqSet
 
 import           GHCAPI
@@ -150,9 +154,24 @@ pluginSolve env gs ds ws = do
     let (gFuneqs, gFuneqsFixCoord, gOthers) = (funeqs, funeqsFixCoord, others)
           where
             Cts{funeqs, funeqsFixCoord, others} = partitionCts env gs
-    let wFuneqs = funeqs
+    let (wFuneqs, wFuneqsFixCoord, wOthers) = (funeqs, funeqsFixCoord, others)
           where
-            Cts{funeqs} = partitionCts env (gs ++ ds ++ ws)
+            Cts{funeqs, funeqsFixCoord, others} = partitionCts env (ds ++ ws)
+        allFuneqs = gFuneqs `plusVarEnv` wFuneqs
+
+    let gFceqEnv = MkFixCoordEqEnv
+            {
+              fceqFlavor = Given
+            ,
+              fceqImprove = emitNewGivenEq
+            ,
+              fceqReplaceEq = \ct _old_lhs _old_rhs lhs rhs ->
+                replaceGivenEq ct lhs rhs
+            ,
+              fceqReplaceFunEq = replaceGivenFunEqFixCoord env
+            ,
+              fceqSigmas0 = Map.empty
+            }
 
     let gTyEqEnv = MkTyEqEnv
             {
@@ -176,16 +195,41 @@ pluginSolve env gs ds ws = do
               tyeqReplace = replaceWantedEq
             }
 
+    let wFceqEnv sigmas0 = MkFixCoordEqEnv
+            {
+              fceqFlavor = Wanted
+            ,
+              fceqImprove = \ct lhs rhs -> do
+                emitNewDerivedEq
+                  (TcRnTypes.bumpCtLocDepth $ TcRnTypes.ctLoc ct)
+                  lhs rhs
+            ,
+              fceqReplaceEq = replaceWantedEq
+            ,
+              fceqReplaceFunEq = replaceWantedFunEqFixCoord env
+            ,
+              fceqSigmas0 = sigmas0
+            }
+
     res <- runPipeline $
-        Stage (canonicalizeFsks env gs) $
-        Stage (simplifyEqualities improveEquality1 gTyEqEnv env gFuneqs gs) $
-        Bind  (simplifyEqualitiesFixCoord env gFuneqs gFuneqsFixCoord gOthers) $ \_sigma ->
-        Stage (simplifyEqualities improveEquality2 gTyEqEnv env gFuneqs gs) $
-        Stage (canonicalizeFmvs env wFuneqs ds ws) $
-        Stage (simplifyEqualities improveEquality1 wTyEqEnv env wFuneqs ws) $
-        Stage (simplifyEqualities improveEquality2 wTyEqEnv env wFuneqs ws) $
-        Stage (reduceToCoords env wFuneqs ws) $
-        Done
+      Stage (canonicalizeFsks env gs) $
+      Stage (simplifyEqualities improveEquality1                   gTyEqEnv env gFuneqs gs) $
+      Bind  (simplifyFixCoords gFceqEnv env gFuneqs gFuneqsFixCoord gOthers) $ \gSigmasFixCoord ->
+      Stage (simplifyEqualities (improveEquality2 gSigmasFixCoord) gTyEqEnv env gFuneqs gs) $
+
+      Stage (canonicalizeFmvs env allFuneqs ds ws) $
+        -- TODO ^^^ handle Derived FunEqs!
+      Stage (simplifyEqualities improveEquality1                   wTyEqEnv env allFuneqs ws) $
+      Bind  (simplifyFixCoords (wFceqEnv gSigmasFixCoord) env allFuneqs wFuneqsFixCoord wOthers) $ \wSigmasFixCoord ->
+        -- TODO ^^^ what if we have ([W] fsk ~ MkProved, [G] FixCoords
+        -- ... ~ fsk)? How would we update the *Given* FunEq?
+        -- 'simplifyFixCoords' currently just ignores such a @~@ since
+        -- we only pass @wFunEqsFixCoord@.
+      Stage (simplifyEqualities (improveEquality2 wSigmasFixCoord) wTyEqEnv env allFuneqs ws) $
+
+      Stage (reduceToCoords env allFuneqs ws) $
+
+      Done
 
     putSDoc env $ ppr res
     pure (tcPluginResult res)
@@ -203,6 +247,7 @@ data Pipeline =
 runPipeline :: Pipeline -> TcPluginM.TcPluginM Result
 runPipeline = go
   where
+    -- TODO should we keep going in order to find contradictions ASAP?
     go = \case
         Done      -> pure mempty
         Stage m k -> do
@@ -398,13 +443,30 @@ reduceToCoords env funeqs ws = do
 
 
 {------------------------------------------------------------------------------
-    Canonicalizing given FixCoord equalities
+    Canonicalizing and interacting FixCoord equalities
 ------------------------------------------------------------------------------}
 
-data Acc_simplifyEqualitiesFixCoord = MkAcc_simplifyEqualitiesFixCoord
-  !Bool
+data FixCoordEqEnv = MkFixCoordEqEnv
+    {
+      fceqFlavor :: Flavor
+    ,
+      fceqImprove :: Ct -> TcType -> TcType -> TcPluginM.TcPluginM Result
+    ,
+      fceqReplaceEq ::
+        Ct ->
+        TcType -> TcType ->
+        TcType -> TcType ->
+        TcPluginM.TcPluginM Result
+    ,
+      fceqReplaceFunEq ::
+        FunEqFixCoord ->
+        (Integer, Integer, Xi, QVec) ->
+        TcPluginM.TcPluginM Result
+    ,
+      fceqSigmas0 :: Map NDXi (VarEnv QVec)
+    }
 
-  -- ^ whether any two work-in-progress constraints have interacted
+data Acc_simplifyFixCoords = MkAcc_simplifyFixCoords
 
   !(Map NDXi (VarEnv QVec))
 
@@ -424,11 +486,11 @@ data Acc_simplifyEqualitiesFixCoord = MkAcc_simplifyEqualitiesFixCoord
   -- The 'Bool' indicates whether the underlying 'TcRnTypes.CFunEqCan'
   -- needs to be updated; see the @inner@ loop for details.
 
-simplifyEqualitiesFixCoord ::
-    Env -> VarEnv FunEq -> VarEnv FunEqFixCoord -> [Ct] ->
+simplifyFixCoords ::
+    FixCoordEqEnv -> Env -> VarEnv FunEq -> VarEnv FunEqFixCoord -> [Ct] ->
     TcPluginM.TcPluginM (Map NDXi (VarEnv QVec), Result)
-simplifyEqualitiesFixCoord env funeqs funeqsFixCoord others = do
-    putSDoc env $ text $ "----- Simplifying FixCoord eqs -----"
+simplifyFixCoords fceqEnv env funeqs funeqsFixCoord others = do
+    putSDoc env $ text $ "----- Simplifying " <> show fceqFlavor <> " FixCoord eqs -----"
 
     let eqs =
             [ (ct, funeq, zm, False)
@@ -451,141 +513,276 @@ simplifyEqualitiesFixCoord env funeqs funeqsFixCoord others = do
 
     putSDoc env $ text "---"
 
-    outer emptyAcc eqs
+    work eqs
   where
+    MkFixCoordEqEnv{..} = fceqEnv
     MkEnv{..} = env
     MkDeclsFixCoord{..} = envDeclsFixCoord
 
     mkProved = GhcPlugins.mkTyConTy dMkProved
 
-    emptyAcc = MkAcc_simplifyEqualitiesFixCoord False Map.empty []
+    emptyAcc = MkAcc_simplifyFixCoords fceqSigmas0 []
 
-    outer acc eqs =
-        -- repeat until no constraints interact
-        if flag then do putSDoc env (text "Looping"); outer emptyAcc inert_eqs
-                else do
-          -- emit updated constraints
-          r <- foldForM inert_eqs $ \(ct, funeq, zm, eqflag) ->
-            mwhen eqflag $ do
-              putSDoc env $ text "Simplifying" $$ ppr ct $$ ppr funeq $$ ppr zm
-              let MkFunEqFixCoord{..} = funeq
-                  (_n, _d, e0, _t) = fefc_lhs
+    -- We only do one pass for these reasons:
+    --
+    -- 0) It's simpler.
+    --
+    -- 1) We don't want to derive too many improvement equalities at
+    --    once, since that can lead to error messages as unhelpful as
+    --    @True is not False@.
+    --
+    -- 2) We intend to eventually generate useful coercions. When one
+    --    FixCoord constraint's substitution applies to another
+    --    FixCoord constraint, we'll need to record that in the
+    --    corresponding coercion. Doing so incrementally will be
+    --    easiest if we use the 'Result' to generate the new
+    --    constraint right away. (Ultimately, this provides sharing in
+    --    the evterms.)
+    --
+    -- 3) When one Derived or Wanted-Derived FixCoord constraint's
+    --    substitution applies to a (different) Wanted-Derived
+    --    FixCoord constraint, we'll need to split the latter into its
+    --    Wanted and shadow Derived, since Wanteds are not allowed to
+    --    (directly) simplify Wanteds. (Such indirect rewriting is the
+    --    raison d'être of Derived constraints, since it might reveal
+    --    some necessary unifications that then let us simplify/solve
+    --    the Wanteds.) This is also simplest via an ASAP 'Result'.
+    --
+    -- Reasons 2 and 3 wouldn't be a concern if the plugin didn't
+    -- handle constraint-constraint interactions. Specifically, we
+    -- wouldn't have to do this if not for FixCoord constraints, since
+    -- the other constraints that interact are all proper @~@
+    -- equalities that GHC's own solver already correctly handles.
+    work eqs = do
+        -- emit updated constraints or else derived constraints that
+        -- will simplify at least one constraint
+        r <- firstResultForM inert_eqs $ \(ct, funeq, zm, eqflag) -> do
+          putSDoc env $ text "Simplifying" $$ ppr ct $$ ppr funeq $$ ppr zm
 
-                  -- TODO for total completeness, we should
-                  -- technically have another stage in the plugin
-                  -- pipeline which applies the sigmas to any
-                  -- FunEqFixCoord, even if that FunEqFixCoord doesn't
-                  -- occur in a CTyEqCan with a MkProved RHS. I
-                  -- haven't done that yet, because I don't anticipate
-                  -- it ever being useful. However, if we were to do
-                  -- that, then this computation of @(n', d', zm')@
-                  -- likely belongs there, to be re-used here.
+          let MkFunEqFixCoord{..} = funeq
+              (n, d, e0, fa) = fefc_lhs
 
-                  -- separate the 'QVec' into the arguments of the
-                  -- 'FunEqFixCoord'
-                  --
-                  -- > 0 ~ zm
-                  -- >   iff
-                  -- > -q_e ~ zm_less_e
-                  -- >   iff
-                  -- > n'/d' e ~ zm_less_e
-                  (n', d', zm') = case compare n1 0 of
+          case checkFixCoord env e0 zm of
 
-                      LT -> (negate n1, d1, negateQVec zm_less_e)
-
-                      EQ -> (0, 0, zm_less_e)
-                        -- TODO when to negateQVec in this EQ case?
-                        -- The inversion or lack thereof might prevent
-                        -- a G from matching a W...
-                        --
-                        -- TODO Once we're inverting here, we should
-                        -- also figure out how to set @eqflag@ when
-                        -- inversion is necessary (ie add this as
-                        -- @hit4@).
-
-                      GT -> (n1, d1, zm_less_e)
-
-                    where
-                      n1 = numerator q1; d1 = denominator q1
-
-                      -- -q_e ~ zm_less_e   iff   q1 ~ zm_less_e
-                      q1 = negate q_e
-
-                      -- 0 ~ zm   iff   -q_e ~ zm_less_e
-                      (q_e, zm_less_e) = popQVec e0 zm
-                      
-              -- Note that @n'@ and @d'@ might be the same as @_n@ and
-              -- @_d@, but if so then some other part of the
-              -- constraint must have changed, since @eqflag@ is set.
-
-              if
-
-                -- tautology
-                --
-                -- Recall that zm includes the (-n / d * e0) summand.
-
-                | mempty == zm -> do
-                  putSDoc env $ text "Tautology"
-                  replaceGivenEq fefc_ct
-                    (GhcPlugins.mkTyVarTy fefc_rhs) mkProved
-
-                -- contradiction
-                --
-                -- Recall that zm' is zm without the (-n / d * e0)
-                -- summand. If the e0 coefficient is also 0, then the
-                -- previous case would have handled it.
-
-                | mempty == zm' -> do
-                  putSDoc env $ text "Contradiction"
-                  pure $ Result $ TcRnTypes.TcPluginContradiction [ct]
+            FixCoordDecided dec
+                | dec -> do
+                putSDoc env $ text "Tautology"
+                let lhs' =
+                        ( toInteger n, toInteger d
+                        , e0
+                        , funArgType env fefc_kind fa
+                        )
+                fceqReplaceEq fefc_ct
+                  (fixCoordType env fefc_kind lhs')
+                  (GhcPlugins.mkTyVarTy fefc_rhs)
+                  (GhcPlugins.mkTyVarTy fefc_rhs) mkProved
 
                 | otherwise -> do
+                putSDoc env $ text "Contradiction"
+                pure $ Result $ TcRnTypes.TcPluginContradiction [ct]
+
+            FixCoordImprovable deqs -> do
+                -- TODO simultaneously emitting several derived
+                -- equalities for this FixCoord) can lead to
+                -- terrible type errors
+                putSDoc env $ text "Deriving" <+> ppr (e0, NE.toList deqs)
+                foldForM deqs $ \(MkNDXi ei) -> fceqImprove ct e0 ei
+
+            FixCoordStuck n' d' zm' -> do
+                -- no actionable conclusion ...
+                mwhen eqflag $ do   -- .. but otherwise simplified
                   putSDoc env $ text "Simpler"
-                  replaceGivenFunEqFixCoord env funeq (n', d', e0, zm')
+                  fceqReplaceFunEq funeq (n', d', e0, zm')
 
-          pure (sigmas, r)
+        pure (sigmas, r)
       where
-        MkAcc_simplifyEqualitiesFixCoord flag sigmas inert_eqs = inner acc eqs
+        MkAcc_simplifyFixCoords sigmas inert_eqs =
+            foldl snoc emptyAcc eqs
 
-    inner acc = \case
-        []       -> acc
-        eq : eqs -> do
-            let (ct, funeq@MkFunEqFixCoord{..}, zm0, eqflag) = eq
-                (n, d, e0, _t) = fefc_lhs
-
-            let sigma = Map.findWithDefault emptyVarEnv (MkNDXi e0) sigmas
-                (hits1, zm1) = substQVec sigma zm0
-                hit1 = not $ isEmptyVarSet hits1
-
-                (hits2, zm2) = projectQVec e0 zm1
-                hit2 = not $ null hits2
-
-                hit3 = q /= negate (fromIntegral n / fromIntegral d)
-                  where
-                    (q, _zm3) = popQVec e0 zm1
-
-                eqflag' =
-                    eqflag
-                    || hit1   -- a variable occurrence was eliminated
-
-                    || hit2   -- an apart basis vector was eliminated
-
-                    || hit3   -- the focused basis vector needs to be
-                              -- consolidated into the 'FunEqFixCoord'
-
-            let sigma' = case interpretQVec zm2 of
-                    Nothing       -> sigma
-                    Just (v, rhs) -> extendVarEnv sigma v rhs
-
-            let acc' = MkAcc_simplifyEqualitiesFixCoord
-                    (flag || hit1)
-                    (if isEmptyVarEnv sigma' then sigmas else
-                     Map.insert (MkNDXi e0) sigma' sigmas)
-                    ((ct, funeq, zm2, eqflag') : inert_eqs)
-
-            inner acc' eqs
+    snoc ::
+        Acc_simplifyFixCoords ->
+        (Ct, FunEqFixCoord, QVec, Bool) ->
+        Acc_simplifyFixCoords
+    snoc acc eq = acc'
       where
-        MkAcc_simplifyEqualitiesFixCoord flag sigmas inert_eqs = acc
+        MkAcc_simplifyFixCoords sigmas inert_eqs = acc
+        (ct, funeq@MkFunEqFixCoord{..}, zm0, eqflag) = eq
+        (n, d, e0, _t) = fefc_lhs
+
+        sigma = Map.findWithDefault emptyVarEnv (MkNDXi e0) sigmas
+        (hits1, zm1) = substQVec sigma zm0
+        hit1 = not $ isEmptyVarSet hits1
+
+        (hits2, zm2) = projectQVec e0 zm1
+        hit2 = not $ null hits2
+
+        hit3 = q /= negate (fromIntegral n / fromIntegral d)
+          where
+            (q, _zm3) = popQVec e0 zm1
+
+        eqflag' =
+            eqflag
+            || hit1   -- a variable occurrence was eliminated
+
+            || hit2   -- an apart basis vector was eliminated
+
+            || hit3   -- the focused basis vector needs to be
+                      -- consolidated into the 'FunEqFixCoord'
+                      -- argument
+
+        sigma' = case interpretQVec zm2 of
+            Nothing       -> sigma
+            Just (v, rhs) -> extendVarEnv sigma v rhs
+
+        acc' = MkAcc_simplifyFixCoords
+            (if isEmptyVarEnv sigma' || Wanted == fceqFlavor then sigmas else   -- TODO split WDs
+             Map.insert (MkNDXi e0) sigma' sigmas)
+            ((ct, funeq, zm2, eqflag') : inert_eqs)
+
+-- | A status about a 'Data.QVec.FixCoord' constraint
+
+data FixCoordStatus =
+      FixCoordDecided Bool
+    |
+      FixCoordImprovable (NonEmpty NDXi)
+
+      -- ^ any solution will require these arguments are each
+      -- equivalent to the index argument of the 'Data.QVec.FixCoord'
+
+    |
+      FixCoordStuck Integer Integer QVec
+
+      -- ^ the 'Data.QVec.FixCoord' arguments
+
+checkFixCoord ::
+    Env -> Xi {- ^ the @e0@ -} ->
+    QVec {- ^ the entire equality, including the focused constant -} ->
+    FixCoordStatus
+checkFixCoord env e0 zm
+
+    -- Recall that zm includes the (-n / d * e0) summand.
+
+    | mempty == zm = FixCoordDecided True
+
+    -- 4) If there are no satisfiable possibilities,
+    --    Contradiction.
+
+    | null vs && null sats = FixCoordDecided False
+
+    -- TODO currently do not claim contradictions unless
+    -- vs is empty. However, if all the remaining vs have
+    -- corresponding BitCoords constraints, then that
+    -- bounds what they could possibly contribute, which
+    -- means we might be able to find more contradictions
+
+    -- 5) If the i-th bit is set in every satisfiable
+    --    possibility, emit a constraint e0 ~ ei.
+
+    | null vs, Just xs <- nonEmpty deqs = FixCoordImprovable xs
+
+    -- TODO
+    --
+    -- 6) If the i-th bit is clear in every satisfiable
+    --    possibility, emit a constraint e0 /~ ei.
+
+ -- null vs && not (null dneqs) -> ...
+
+    | otherwise = FixCoordStuck n' d' zm'
+  where
+    MkEnv{..} = env
+    MkDeclsFixCoord{..} = envDeclsFixCoord
+
+    -- TODO for total completeness, we should technically have another
+    -- stage in the plugin pipeline which applies the sigmas to any
+    -- FunEqFixCoord, even if that FunEqFixCoord doesn't occur in a
+    -- CTyEqCan with a MkProved RHS. I haven't done that yet, because
+    -- I don't anticipate it ever being useful. However, if we were to
+    -- do that, then this computation of @(n', d', zm')@ likely
+    -- belongs there, to be re-used here.
+
+    -- separate the 'QVec' into the arguments of the 'FunEqFixCoord'
+    --
+    -- > 0 ~ zm
+    -- >   iff
+    -- > -q_e ~ zm_less_e
+    -- >   iff
+    -- > n'/d' e ~ zm_less_e
+    (n', d', zm') = case compare n1 0 of
+
+        LT -> (negate n1, d1, negateQVec zm_less_e)
+
+        EQ -> (0, 0, zm_less_e)
+          -- TODO when to negateQVec in this EQ case? The inversion or
+          -- lack thereof might prevent a G from matching a W...
+          --
+          -- TODO Once we're inverting here, we should also figure out
+          -- how to set @eqflag@ when inversion is necessary (ie add
+          -- this as @hit4@).
+
+        GT -> (n1, d1, zm_less_e)
+
+      where
+        n1 = numerator q1; d1 = denominator q1
+
+        -- -q_e ~ zm_less_e   iff   q1 ~ zm_less_e
+        q1 = negate q_e
+
+        -- 0 ~ zm   iff   -q_e ~ zm_less_e
+        (q_e, zm_less_e) = popQVec e0 zm
+            
+    -- Note that @n'@ and @d'@ might be the same as @_n@ and @_d@, but
+    -- if so then some other part of the constraint must have changed,
+    -- since @eqflag@ is set.
+
+    -- Basic plan for @FixCoord n d e0 (q1 e1 + q2 e2 + ... + qn en)@,
+    -- where @e0@ and @ei@ are neither manifestly equal nor manifestly
+    -- apart.
+    MkQVec vs es = zm'
+
+    -- 1) Explore all 2^n possibilities. Each bit indicates whether
+    --    the element type ends up being equivalent to or apart from
+    --    e0.
+    posss = subsequences (Map.toList es)
+
+    -- 2) Within each possibility, invoke the pure unifier to
+    --    determine if the possibility is feasible. It should either
+    --    fail (infeasible) or provide an mgu (feasible).
+
+    --    NOTE The possibility with n-many 0s is always feasible
+    --    (recall n may itself be 0).
+
+    --    Unify. (I2) says: If (unify t1 t2) = MaybeApart theta and if
+    --    some phi exists such that phi(t1) ~ phi(t2), then phi
+    --    extends theta.
+
+    --    So MaybeApart indicates a possibility might actually be
+    --    infeasible.
+
+    --    TODO how to properly handle each flavor of tyvar?
+
+    --    TODO need to zonk first?
+
+    -- 3) If a feasible possibility's coefficients add up to n / d,
+    --    then it's a satisfiable possibility. Feasible possibilities
+    --    that don't add up and the unfeasible possibilities are
+    --    lumped together as the unsatisfiable possibilities.
+    sats =
+        [ (mgu, Set.fromList (map fst poss))
+        | poss <- posss
+        , fromIntegral n' / fromIntegral d' == sum (map snd poss)
+        , let poss' = [ ei | (MkNDXi ei, _q) <- poss ]
+        , mgu <- case unifyTypes (zip poss' (e0 : tail poss')) of
+            Unify.Unifiable mgu -> [mgu]
+            _                   -> []
+            -- TODO what about Unify.MaybeApart?
+        ]
+
+    -- see item 5)
+    deqs =
+        [ ei
+        | (ei, _) <- Map.toList es
+        , all (Set.member ei . snd) sats
+        ]
 
 {------------------------------------------------------------------------------
     Shared logic
@@ -701,30 +898,29 @@ improveEquality1 MkTyEqEnv{..} env MkTyEq{..} zm@(MkQVec vs _bs) =
 
 -- | Improve equalities that do not have vector variables
 --
--- Emit derived equalities among pairs of basis elements. Each pair
--- includes an element with a positive multiplicity and one with a
--- negative multiplicity. Two elements are so paired if one of them is
--- 'apart' from enough of the other elements it could be paired with
--- that the equality is impossible unless these two unify.
---
 -- E.G. @(Nil :+ [x] :+ b) ~ (Nil :+ y :+ Maybe a)@ yields @[x] ~ y@
 -- and @b ~ Maybe a@.
 
 improveEquality2 ::
-    TyEqEnv -> Env -> TyEq -> QVec -> TcPluginM.TcPluginM Result
-improveEquality2 MkTyEqEnv{..} _env MkTyEq{..} (MkQVec vs bs) =
-    mwhen (null vs) $
-    case balance apartNDXi pos neg of
-      Nothing -> pure $ Result $ TcRnTypes.TcPluginContradiction [te_ct]
-      Just pairs -> foldForM pairs $ \(MkNDXi lhs, MkNDXi rhs) -> do
-          putSDoc _env $
-            text "Derived basis equivalence" <+> ppr lhs <+> ppr rhs
-          tyeqImprove te_ct lhs rhs
+    Map NDXi (VarEnv QVec) {- the 'Data.QVec.FixCoord' subst -} ->
+    TyEqEnv -> Env -> TyEq -> QVec ->
+    TcPluginM.TcPluginM Result
+improveEquality2 sigmas MkTyEqEnv{..} env MkTyEq{..} zm0@(MkQVec _ bs0) =
+    firstResultForM (Map.keys bs0) $ \(MkNDXi e0) ->
+      let sigma = Map.findWithDefault emptyVarEnv (MkNDXi e0) sigmas
+          (_, zm1@(MkQVec vs bs)) = substQVec sigma zm0
+      in
+      mwhen (null vs) $
+      if 0 /= sum bs then pure contra else   -- TODO unnecessary check?
+      case checkFixCoord env e0 zm1 of
+        FixCoordDecided dec     -> munless dec $ pure contra
+        FixCoordImprovable deqs -> foldForM deqs $ \(MkNDXi e) -> do
+          putSDoc env $
+            text "Derived basis equivalence" <+> ppr e0 <+> ppr e
+          tyeqImprove te_ct e0 e
+        FixCoordStuck{}         -> pure mempty
   where
-
-    (pos, neg) = partitionPosNeg bs
-
-    apartNDXi (MkNDXi l) (MkNDXi r) = apart l r
+    contra = Result $ TcRnTypes.TcPluginContradiction [te_ct]
 
 {------------------------------------------------------------------------------
     Partitions constraints

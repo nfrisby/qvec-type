@@ -3,7 +3,7 @@
 
 -- | Wrappers around the GHC API.
 
-module GHCAPI where
+module GHCAPI (module GHCAPI) where
 
 import qualified Coercion
 import qualified Finder
@@ -113,9 +113,10 @@ replaceGivenFunEqFixCoord ::
     TcRnTypes.TcPluginM Result
 replaceGivenFunEqFixCoord env MkFunEqFixCoord{..} args =
     replaceFunEq deriveGivenEv solve fefc_ct fefc_rhs
-      (fixCoordTyConArgs env fefc_kind args)
+      (fixCoordTyConArgs env fefc_kind (cnv args))
   where
     solve _new_ev = solveGiven fefc_ct
+    cnv (n, d, e0, zm) = (n, d, e0, treeType env fefc_kind (qVecTree zm))
 
 deriveGivenEv ::
     Ct -> TcType -> TcType ->
@@ -155,6 +156,23 @@ replaceWantedFunEq env funeq@MkFunEq{..} fat =
         -- we use the unflattened type instead of the fmv itself,
         -- since we are intentionally updating its definition
         (funAppType env fe_kind treeType fat)
+        new_ev
+
+replaceWantedFunEqFixCoord ::
+    Env -> FunEqFixCoord -> (Integer, Integer, TcRnTypes.Xi, QVec) -> TcRnTypes.TcPluginM Result
+replaceWantedFunEqFixCoord env MkFunEqFixCoord{..} args =
+    replaceFunEq deriveWantedEv solve fefc_ct fefc_rhs tcargs
+  where
+    tcargs = fixCoordTyConArgs env fefc_kind (cnv1 args)
+    cnv1 (n, d, e0, zm) = (n, d, e0, treeType env fefc_kind (qVecTree zm))
+    cnv2 (n, d, e0, fa) =
+        (toInteger n, toInteger d, e0, funArgType env fefc_kind fa)
+
+    solve new_ev = solveWantedEq fefc_ct
+        (fixCoordType env fefc_kind (cnv2 fefc_lhs))
+        -- we use the unflattened type instead of the fmv itself,
+        -- since we are intentionally updating its definition
+        (GhcPlugins.mkTyConApp `uncurry` tcargs)
         new_ev
 
 replaceWantedEq ::

@@ -50,6 +50,7 @@ module Plugin.QVec.Types (
   prjFunEqCoords,
   -- *
   FunEqFixCoord (..),
+  fixCoordType,
   fixCoordTyConArgs,
   prjFunEqFixCoord,
   -- *
@@ -59,6 +60,7 @@ module Plugin.QVec.Types (
   solveGiven,
   solveDerived,
   solveWanted,
+  firstResultForM,
   -- *
   NDVar (..),
   NDXi (..),
@@ -75,11 +77,13 @@ module Plugin.QVec.Types (
   -- *
   antiSwapMasquerade,
   ridiculousTcLevel,
+  unifyTypes,
   ) where
 
 import           Control.Applicative ((<|>))
-import           Control.Monad (guard)
+import           Control.Monad (foldM, guard)
 import           Data.Foldable (fold)
+import           Data.Functor ((<&>))
 import           Data.IORef (IORef)
 import           Data.List (sortOn)
 import           Data.Map (Map)
@@ -843,14 +847,21 @@ prjFunEqFixCoord env@MkEnv{..} ct = do
     nat = fmap fromInteger . GhcPlugins.isNumLitTy
 
 fixCoordTyConArgs ::
-    Env -> TcType.Kind -> (Integer, Integer, Xi, QVec) -> (TyCon, [Xi])
-fixCoordTyConArgs env@MkEnv{..} k (n, d, e, zm) =
-    tycon dFixCoord [k, nat n, nat d, e, treeType env k (qVecTree zm)]
+    Env -> TcType.Kind -> (Integer, Integer, Xi, Xi) -> (TyCon, [Xi])
+fixCoordTyConArgs MkEnv{..} k (n, d, e, t) =
+    tycon dFixCoord [k, nat n, nat d, e, t]
   where
     MkDeclsFixCoord{..} = envDeclsFixCoord
 
     tycon = (,)
     nat = GhcPlugins.mkNumLitTy . fromIntegral
+
+fixCoordType ::
+    Env -> TcType.Kind -> (Integer, Integer, Xi, Xi) -> Xi
+fixCoordType env k raw_args =
+    GhcPlugins.mkTyConApp tycon args
+  where
+    (tycon, args) = fixCoordTyConArgs env k raw_args
 
 {------------------------------------------------------------------------------
     Parsing QVec
@@ -957,6 +968,14 @@ solveDerived ev ct = Result $ TcRnTypes.TcPluginOk [(ev, ct)] []
 solveWanted :: TcEvidence.EvTerm -> TcRnTypes.Ct -> Result
 solveWanted ev ct = Result $ TcRnTypes.TcPluginOk [(ev, ct)] []
 
+firstResultForM :: (Monad m, Foldable t) => t a -> (a -> m Result) -> m Result
+firstResultForM xs f = foldM g mempty xs
+  where
+    g r x = f x <&> \r' -> case r' of
+        Result
+          TcRnTypes.TcPluginContradiction{} -> r <> r'
+        Result _                            -> if nullResult r then r' else r
+
 {------------------------------------------------------------------------------
     Miscellany
 ------------------------------------------------------------------------------}
@@ -991,6 +1010,9 @@ dropKind (_k, x) = x
 
 apart :: TcType.TcType -> TcType.TcType -> Bool
 apart l r = Unify.typesCantMatch [(l,r)]
+
+unifyTypes :: [(TcType.TcType, TcType.TcType)] -> Unify.UnifyResult
+unifyTypes ts = Unify.tcUnifyTysFG (const Unify.BindMe) (map fst ts) (map snd ts)
 
 -- | A 'TcType.TcLevel' depth no reasonable program will ever reach
 

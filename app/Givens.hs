@@ -85,6 +85,46 @@ main = do
       wanted (pD .~. pList pA) <>
       wanted (pB .~. pMaybe pC)
 
+    -- FixCoord 2 Int (Bv1 a :- Char :+ Int)
+    pure $
+      nuA $ \pa ->
+      given (pFixCoord p2 p1 pInt (pBv1 pa .- pChar .+ pInt) .~. pMkProved) $
+      ()
+
+    -- FixCoord 1 [Int] (Bv1 [a] :- Maybe b)
+    pure $
+      nuB $ \pb ->
+      nuA $ \pa ->
+      given (pFixCoord p1 p1 (pList pInt) (pBv1 (pList pa) .- pMaybe pb) .~. pMkProved) $
+      ()
+
+    -- G1 FixCoords 1 1 a x
+    -- G2 x ~ Nil :+ b
+    -- W1 a ~ b
+    --
+    -- The FixCoord substitution of G1 crucially reveals the
+    -- improvement a ~ b from G2.
+    pure $
+      nuA $ \pa ->
+      nuB $ \pb ->
+      nuX $ \px ->
+      given (pFixCoord p1 p1 pa px .~. pMkProved) $
+      given (px .~. (pNil .+ pb)) $
+      wanted (pa .~. pb)
+
+    -- W1 FixCoord 1 1 a (Bv1 a)
+    pure $
+      nuA $ \pa ->
+      wanted (pFixCoord p1 p1 pa (pBv1 pa) .~. pMkProved)
+
+    -- G1 FixCoord 1 1 a x
+    -- W1 FixCoord 2 1 a (x :+ a)
+    pure $
+      nuX $ \px ->
+      nuA $ \pa ->
+      given (pFixCoord p1 p1 pa px .~. pMkProved) $
+      wanted (pFixCoord p2 p1 pa (px .+ pa) .~. pMkProved)
+
 -- Foo (x :+: x) => Foo (ScN 2 x)
 --
 -- Requires canonicalizing fsks
