@@ -86,10 +86,17 @@ executable smoke
 
   ghc-options:
     -Wall
-    -Werror
-    -Wincomplete-record-updates
+    -Wcompat
     -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wpartial-fields
+    -Widentities
+    -Wredundant-constraints
+    -Wmissing-export-lists
+
     -Wno-unticked-promoted-constructors
+
+    -Werror
 
     -dcore-lint
     -fconstraint-solver-iterations=10

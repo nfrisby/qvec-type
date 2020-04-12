@@ -3,9 +3,14 @@
 
 {-# OPTIONS_GHC -fplugin=Plugin.QVec #-}
 
+{-# OPTIONS_GHC -Wwarn=missing-signatures #-}
+
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
 module Variants (module Variants) where
 
 import           Data.Dynamic
+import           Data.Kind (Type)
 import           GHC.Stack (HasCallStack)
 
 import           Defns
@@ -13,7 +18,7 @@ import           Defns
 -- | A polymorphic variant, storing one of the types that occurs in
 -- the index vector
 
-newtype V (u :: QVec *) = UnsafeV Dynamic
+newtype V (u :: QVec Type) = UnsafeV Dynamic
   deriving (Show)
 
 mkV :: (Typeable a, FixCoord 1 1 a u ~ MkProved) => a -> V u
