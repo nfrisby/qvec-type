@@ -72,10 +72,12 @@ executable smoke
 
     UomPluginTests
 
+    Records
     Variants
 
   build-depends:
       base
+    , containers
     , qvec-type
 
   default-extensions:
