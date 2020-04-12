@@ -180,6 +180,6 @@ data Proved = MkProved
 -- | Fix a basis coordinate
 --
 -- This family is uninterpretable unless the naturals are both
--- literals and the denominator is zero iff the numerator is zero.
+-- literals and the denominator is not zero.
 
 type family FixCoord (n :: Nat) (d :: Nat) (e :: k) (v :: QVec k) :: Proved where {}

@@ -642,6 +642,7 @@ prjFunAppTyConArgs env@MkEnv{..} (tc, args) =
           [k, n, d, e] <- pure args
           n' <- nat n
           d' <- nat d
+          guard $ d' /= 0
           pure (k, FunAppBvQ n' d' e))
     <|> (do
           guard $ tc == dDecr
@@ -681,6 +682,7 @@ prjFunAppTyConArgs env@MkEnv{..} (tc, args) =
           [k, n, d, v] <- pure args
           n' <- nat n
           d' <- nat d
+          guard $ d' /= 0
           arg <- funArg v
           pure (k, FunAppScQ n' d' arg))
   where
@@ -837,6 +839,7 @@ prjFunEqFixCoord env@MkEnv{..} ct = do
         [k, n, d, e, t] <- pure cc_tyargs
         n' <- nat n
         d' <- nat d
+        guard $ d' /= 0
         (_k, t') <- prjFunArg env t
         pure (k, (n', d', e, t'))
 
