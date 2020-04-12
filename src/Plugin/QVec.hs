@@ -711,7 +711,7 @@ checkFixCoord env e0 zm
 
         LT -> (negate n1, d1, negateQVec zm_less_e)
 
-        EQ -> (0, 0, zm_less_e)
+        EQ -> (0, 1, zm_less_e)
           -- TODO when to negateQVec in this EQ case? The inversion or
           -- lack thereof might prevent a G from matching a W...
           --
