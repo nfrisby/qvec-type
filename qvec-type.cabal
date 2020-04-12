@@ -76,7 +76,6 @@ executable smoke
 
   build-depends:
       base
-    , dump-plugin
     , qvec-type
 
   default-extensions:

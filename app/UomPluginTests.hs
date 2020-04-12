@@ -14,8 +14,9 @@
 {-# OPTIONS_GHC -fplugin Plugin.QVec #-}
 
 {-# OPTIONS_GHC -Wno-type-defaults #-}
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
-module UomPluginTests where
+module UomPluginTests (module UomPluginTests) where
 
 import Data.QVec
 import Data.QVec.Qu

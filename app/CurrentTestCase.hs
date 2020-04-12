@@ -2,7 +2,7 @@
 
 -- | For testing one focused example at a time
 
-module CurrentTestCase where
+module CurrentTestCase (module CurrentTestCase) where
 
 -- import           Defns
 

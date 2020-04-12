@@ -6,6 +6,7 @@
 {-# OPTIONS_GHC -fplugin=Plugin.QVec #-}
 
 {-# OPTIONS_GHC -Wno-partial-type-signatures #-}
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Defns (
   module Defns,
@@ -14,30 +15,31 @@ module Defns (
   Proxy (..),
   ) where    
 
+import           Data.Kind (Type)
 import           Data.Proxy (Proxy (..))
 
 import           Data.QVec
 import           Data.QVec.Qu
 
-nuA :: (forall a. Proxy (a :: *) -> ()) -> ()
+nuA :: (forall a. Proxy (a :: Type) -> ()) -> ()
 nuA _ = ()
 
-nuB :: (forall b. Proxy (b :: *) -> ()) -> ()
+nuB :: (forall b. Proxy (b :: Type) -> ()) -> ()
 nuB _ = ()
 
-nuC :: (forall c. Proxy (c :: *) -> ()) -> ()
+nuC :: (forall c. Proxy (c :: Type) -> ()) -> ()
 nuC _ = ()
 
-nuD :: (forall d. Proxy (d :: *) -> ()) -> ()
+nuD :: (forall d. Proxy (d :: Type) -> ()) -> ()
 nuD _ = ()
 
-nuX :: (forall x. Proxy (x :: QVec *) -> ()) -> ()
+nuX :: (forall x. Proxy (x :: QVec Type) -> ()) -> ()
 nuX _ = ()
 
-nuY :: (forall x. Proxy (x :: QVec *) -> ()) -> ()
+nuY :: (forall x. Proxy (x :: QVec Type) -> ()) -> ()
 nuY _ = ()
 
-nuZ :: (forall x. Proxy (x :: QVec *) -> ()) -> ()
+nuZ :: (forall x. Proxy (x :: QVec Type) -> ()) -> ()
 nuZ _ = ()
 
 p0 :: Proxy 0
@@ -128,7 +130,7 @@ pFoo _ = Proxy
 concreteCoords :: ConcreteCoords a => Proxy a -> ()
 concreteCoords _ = ()
 
-class ConcreteCoords (a :: Coords *)
+class ConcreteCoords (a :: Coords Type)
 
 instance ConcreteCoords NilCoords
 instance ConcreteCoords coords => ConcreteCoords (ConsCoords sign n d k coords)

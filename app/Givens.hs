@@ -2,6 +2,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 {-# OPTIONS_GHC -fplugin=Plugin.QVec #-}
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Givens (main) where
 
